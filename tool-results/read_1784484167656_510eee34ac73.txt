@@ -1,0 +1,677 @@
+  1200→  1200→
+  1201→  1201→      .section-title {
+  1202→  1202→        font-size: 17px;
+  1203→  1203→      }
+  1204→  1204→
+  1205→  1205→      .product-card {
+  1206→  1206→        width: 170px;
+  1207→  1207→      }
+  1208→  1208→
+  1209→  1209→      .deal-card {
+  1210→  1210→        width: 210px;
+  1211→  1211→      }
+  1212→  1212→
+  1213→  1213→      .category-circle {
+  1214→  1214→        width: 56px;
+  1215→  1215→        height: 56px;
+  1216→  1216→        font-size: 24px;
+  1217→  1217→      }
+  1218→  1218→    }
+  1219→  1219→
+  1220→  1220→    /* ============================================
+  1221→  1221→       ANIMATIONS
+  1222→  1222→       ============================================ */
+  1223→  1223→    @keyframes fadeIn {
+  1224→  1224→      from { opacity: 0; transform: translateY(8px); }
+  1225→  1225→      to { opacity: 1; transform: translateY(0); }
+  1226→  1226→    }
+  1227→  1227→
+  1228→  1228→    .section-animate {
+  1229→  1229→      animation: fadeIn 0.4s ease forwards;
+  1230→  1230→    }
+  1231→  1231→
+  1232→  1232→    /* Utility */
+  1233→  1233→    .sr-only {
+  1234→  1234→      position: absolute;
+  1235→  1235→      width: 1px;
+  1236→  1236→      height: 1px;
+  1237→  1237→      padding: 0;
+  1238→  1238→      margin: -1px;
+  1239→  1239→      overflow: hidden;
+  1240→  1240→      clip: rect(0,0,0,0);
+  1241→  1241→      white-space: nowrap;
+  1242→  1242→      border: 0;
+  1243→  1243→    }
+  1244→  1244→  </style>
+  1245→  1245→</head>
+  1246→  1246→<body>
+  1247→  1247→  <!-- ============================================
+  1248→  1248→       HEADER
+  1249→  1249→       ============================================ -->
+  1250→  1250→  <header class="header" role="banner">
+  1251→  1251→    <div class="header-inner">
+  1252→  1252→      <!-- Mobile Menu Button -->
+  1253→  1253→      <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Open menu">
+  1254→  1254→        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  1255→  1255→      </button>
+  1256→  1256→
+  1257→  1257→      <!-- Logo -->
+  1258→  1258→      <div class="logo" id="logoBtn">
+  1259→  1259→        <span class="logo-ggh">GGH</span>
+  1260→  1260→        <span class="logo-sub" data-i18n="logoSub">Gomla Go Home</span>
+  1261→  1261→      </div>
+  1262→  1262→
+  1263→  1263→      <!-- Search -->
+  1264→  1264→      <div class="search-bar">
+  1265→  1265→        <input type="text" data-i18n-placeholder="searchPlaceholder" placeholder="Search products, brands...">
+  1266→  1266→        <span class="search-icon">
+  1267→  1267→          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+  1268→  1268→        </span>
+  1269→  1269→      </div>
+  1270→  1270→
+  1271→  1271→      <!-- Actions -->
+  1272→  1272→      <div class="header-actions">
+  1273→  1273→        <button class="lang-toggle" id="langToggle" aria-label="Toggle language">AR</button>
+  1274→  1274→        <button class="cart-btn" id="cartBtn" aria-label="Shopping cart">
+  1275→  1275→          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+  1276→  1276→          <span class="cart-badge" id="cartBadge">0</span>
+  1277→  1277→        </button>
+  1278→  1278→      </div>
+  1279→  1279→    </div>
+  1280→  1280→  </header>
+  1281→  1281→
+  1282→  1282→  <!-- Mobile Menu -->
+  1283→  1283→  <div class="mobile-menu-overlay" id="mobileMenu" role="dialog" aria-label="Mobile navigation">
+  1284→  1284→    <div class="mobile-menu-panel">
+  1285→  1285→      <button class="mobile-menu-close" id="mobileMenuClose" aria-label="Close menu">
+  1286→  1286→        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  1287→  1287→      </button>
+  1288→  1288→      <nav class="mobile-menu-links" id="mobileMenuLinks">
+  1289→  1289→        <!-- Populated by JS -->
+  1290→  1290→      </nav>
+  1291→  1291→    </div>
+  1292→  1292→  </div>
+  1293→  1293→
+  1294→  1294→  <!-- ============================================
+  1295→  1295→       HERO BANNER
+  1296→  1296→       ============================================ -->
+  1297→  1297→  <section class="hero" role="banner">
+  1298→  1298→    <div class="hero-inner">
+  1299→  1299→      <h1 data-i18n="heroTitle">Wholesale Prices,<br>Delivered to Your Door</h1>
+  1300→  1300→      <p data-i18n="heroSubtitle">GGH Gomla Go Home brings B2B wholesale commodity prices directly to households. Rice, oil, sugar, pasta and more — at prices you won't find in retail stores.</p>
+  1301→  1301→      <a href="#products" class="hero-cta" data-i18n="heroCta">
+  1302→  1302→        Shop Now
+  1303→  1303→        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+  1304→  1304→      </a>
+  1305→  1305→    </div>
+  1306→  1306→  </section>
+  1307→  1307→
+  1308→  1308→  <!-- ============================================
+  1309→  1309→       CATEGORIES
+  1310→  1310→       ============================================ -->
+  1311→  1311→  <section class="categories-section" aria-label="Product categories">
+  1312→  1312→    <div class="section-inner">
+  1313→  1313→      <div class="section-header">
+  1314→  1314→        <div class="section-title-group">
+  1315→  1315→          <div class="section-accent-bar"></div>
+  1316→  1316→          <h2 class="section-title" data-i18n="categoriesTitle">Shop by Category</h2>
+  1317→  1317→        </div>
+  1318→  1318→      </div>
+  1319→  1319→      <div class="categories-scroll" id="categoriesScroll" role="list">
+  1320→  1320→        <!-- Populated by JS -->
+  1321→  1321→      </div>
+  1322→  1322→    </div>
+  1323→  1323→  </section>
+  1324→  1324→
+  1325→  1325→  <!-- ============================================
+  1326→  1326→       HOT DEALS
+  1327→  1327→       ============================================ -->
+  1328→  1328→  <section class="hot-deals-section" aria-label="Hot deals">
+  1329→  1329→    <div class="section-inner">
+  1330→  1330→      <div class="hot-deals-header">
+  1331→  1331→        <div class="hot-deals-left">
+  1332→  1332→          <div class="section-title-group">
+  1333→  1333→            <div class="section-accent-bar orange"></div>
+  1334→  1334→            <h2 class="section-title" data-i18n="hotDealsTitle">Hot Deals</h2>
+  1335→  1335→          </div>
+  1336→  1336→          <div class="countdown-timer" id="countdownTimer" aria-label="Deal countdown">
+  1337→  1337→            <span class="countdown-unit" id="cdHours">03</span>
+  1338→  1338→            <span class="countdown-sep">:</span>
+  1339→  1339→            <span class="countdown-unit" id="cdMinutes">00</span>
+  1340→  1340→            <span class="countdown-sep">:</span>
+  1341→  1341→            <span class="countdown-unit" id="cdSeconds">00</span>
+  1342→  1342→          </div>
+  1343→  1343→        </div>
+  1344→  1344→      </div>
+  1345→  1345→      <div class="deals-scroll" id="dealsScroll" role="list">
+  1346→  1346→        <!-- Populated by JS -->
+  1347→  1347→      </div>
+  1348→  1348→    </div>
+  1349→  1349→  </section>
+  1350→  1350→
+  1351→  1351→  <!-- ============================================
+  1352→  1352→       PRODUCT SECTIONS (by category)
+  1353→  1353→       ============================================ -->
+  1354→  1354→  <div id="products">
+  1355→  1355→    <!-- Populated by JS -->
+  1356→  1356→  </div>
+  1357→  1357→
+  1358→  1358→  <!-- ============================================
+  1359→  1359→       FOOTER
+  1360→  1360→       ============================================ -->
+  1361→  1361→  <footer class="footer" role="contentinfo">
+  1362→  1362→    <div class="footer-inner">
+  1363→  1363→      <div class="footer-brand">
+  1364→  1364→        <h3>GGH</h3>
+  1365→  1365→        <p data-i18n="footerBrandDesc">Gomla Go Home — Bringing wholesale commodity prices directly to Egyptian households. Quality products, wholesale prices.</p>
+  1366→  1366→      </div>
+  1367→  1367→      <div class="footer-col">
+  1368→  1368→        <h4 data-i18n="footerQuickLinks">Quick Links</h4>
+  1369→  1369→        <ul>
+  1370→  1370→          <li><a href="#" data-i18n="footerAbout">About Us</a></li>
+  1371→  1371→          <li><a href="#" data-i18n="footerHow">How It Works</a></li>
+  1372→  1372→          <li><a href="#" data-i18n="footerDelivery">Delivery Info</a></li>
+  1373→  1373→          <li><a href="#" data-i18n="footerReturns">Returns Policy</a></li>
+  1374→  1374→        </ul>
+  1375→  1375→      </div>
+  1376→  1376→      <div class="footer-col">
+  1377→  1377→        <h4 data-i18n="footerContact">Contact</h4>
+  1378→  1378→        <ul>
+  1379→  1379→          <li><a href="mailto:support@ggh.eg">support@ggh.eg</a></li>
+  1380→  1380→          <li><a href="tel:+201000000000">+20 100 000 0000</a></li>
+  1381→  1381→          <li data-i18n="footerAddress">Cairo, Egypt</li>
+  1382→  1382→        </ul>
+  1383→  1383→      </div>
+  1384→  1384→      <div class="footer-col">
+  1385→  1385→        <h4 data-i18n="footerFollow">Follow Us</h4>
+  1386→  1386→        <div class="footer-social">
+  1387→  1387→          <a href="#" aria-label="Facebook">
+  1388→  1388→            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg>
+  1389→  1389→          </a>
+  1390→  1390→          <a href="#" aria-label="Instagram">
+  1391→  1391→            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="2" width="20" height="20" rx="5"/><circle cx="12" cy="12" r="5"/><circle cx="17.5" cy="6.5" r="1.5" fill="currentColor" stroke="none"/></svg>
+  1392→  1392→          </a>
+  1393→  1393→          <a href="#" aria-label="Twitter">
+  1394→  1394→            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+  1395→  1395→          </a>
+  1396→  1396→        </div>
+  1397→  1397→      </div>
+  1398→  1398→    </div>
+  1399→  1399→    <div class="footer-bottom">
+  1400→  1400→      <span data-i18n="footerCopy">&copy; 2025 GGH Gomla Go Home. All rights reserved.</span>
+  1401→  1401→    </div>
+  1402→  1402→  </footer>
+  1403→  1403→
+  1404→  1404→  <!-- ============================================
+  1405→  1405→       CART SLIDE-OUT
+  1406→  1406→       ============================================ -->
+  1407→  1407→  <div class="cart-overlay" id="cartOverlay" role="dialog" aria-label="Shopping cart">
+  1408→  1408→    <div class="cart-panel">
+  1409→  1409→      <div class="cart-header">
+  1410→  1410→        <h3 data-i18n="cartTitle">Your Cart</h3>
+  1411→  1411→        <button class="cart-close-btn" id="cartCloseBtn" aria-label="Close cart">
+  1412→  1412→          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  1413→  1413→        </button>
+  1414→  1414→      </div>
+  1415→  1415→      <div class="cart-items" id="cartItems">
+  1416→  1416→        <!-- Populated by JS -->
+  1417→  1417→      </div>
+  1418→  1418→      <div class="cart-footer" id="cartFooter">
+  1419→  1419→        <div class="cart-summary-row">
+  1420→  1420→          <span data-i18n="cartSubtotal">Subtotal</span>
+  1421→  1421→          <span id="cartSubtotal">0.00 EGP</span>
+  1422→  1422→        </div>
+  1423→  1423→        <div class="cart-summary-row">
+  1424→  1424→          <span data-i18n="cartDelivery">Delivery</span>
+  1425→  1425→          <span class="free-badge" data-i18n="cartFree">Free</span>
+  1426→  1426→        </div>
+  1427→  1427→        <div class="cart-summary-row total">
+  1428→  1428→          <span data-i18n="cartTotal">Total</span>
+  1429→  1429→          <span id="cartTotal">0.00 EGP</span>
+  1430→  1430→        </div>
+  1431→  1431→        <button class="checkout-btn" data-i18n="cartCheckout">Proceed to Checkout</button>
+  1432→  1432→      </div>
+  1433→  1433→    </div>
+  1434→  1434→  </div>
+  1435→  1435→
+  1436→  1436→  <!-- ============================================
+  1437→  1437→       JAVASCRIPT
+  1438→  1438→       ============================================ -->
+  1439→  1439→  <script>
+  1440→  1440→    /* ============================================
+  1441→  1441→       DATA
+  1442→  1442→       ============================================ */
+  1443→  1443→    const CATEGORIES = [
+  1444→  1444→      { id: 'rice',     icon: '🍚', en: 'Rice & Grains',        ar: 'أرز وحبوب' },
+  1445→  1445→      { id: 'pasta',    icon: '🍝', en: 'Pasta & Noodles',      ar: 'مكرونة ونعناع' },
+  1446→  1446→      { id: 'tomato',   icon: '🥫', en: 'Canned Goods',         ar: 'معلبات' },
+  1447→  1447→      { id: 'oil',      icon: '🫒', en: 'Oils & Fats',          ar: 'زيوت ودهون' },
+  1448→  1448→      { id: 'sugar',    icon: '🍬', en: 'Sugar & Sweeteners',   ar: 'سكر ومحليات' },
+  1449→  1449→      { id: 'flour',    icon: '🌾', en: 'Flour',                ar: 'دقيق' },
+  1450→  1450→      { id: 'beans',    icon: '🫘', en: 'Beans',                ar: 'فول' },
+  1451→  1451→      { id: 'tea',      icon: '🍵', en: 'Tea & Coffee',         ar: 'شاي وقهوة' },
+  1452→  1452→      { id: 'coffee',   icon: '☕', en: 'Coffee',               ar: 'قهوة' },
+  1453→  1453→      { id: 'cleaning', icon: '🧹', en: 'Cleaning',             ar: 'تنظيف' }
+  1454→  1454→    ];
+  1455→  1455→
+  1456→  1456→    const PRODUCTS = [
+  1457→  1457→      { id: 1,  nameEn: 'Premium Rice',       nameAr: 'أرز ممتاز',  brandEn: 'Al Doha',  brandAr: 'الضحى',    weight: '1kg',  today: 25.00,  yesterday: 27.00,  category: 'rice',   icon: '🍚' },
+  1458→  1458→      { id: 2,  nameEn: 'Premium Rice',       nameAr: 'أرز ممتاز',  brandEn: 'Al Doha',  brandAr: 'الضحى',    weight: '5kg',  today: 110.00, yesterday: 115.00, category: 'rice',   icon: '🍚' },
+  1459→  1459→      { id: 3,  nameEn: 'Pasta',              nameAr: 'مكرونة',     brandEn: 'El Maleka', brandAr: 'الملكة',   weight: '500g', today: 15.00,  yesterday: 16.00,  category: 'pasta',  icon: '🍝' },
+  1460→  1460→      { id: 4,  nameEn: 'Pasta',              nameAr: 'مكرونة',     brandEn: 'Regina',   brandAr: 'رجينا',    weight: '500g', today: 14.50,  yesterday: 15.50,  category: 'pasta',  icon: '🍝' },
+  1461→  1461→      { id: 5,  nameEn: 'Tomato Paste',       nameAr: 'صلصة طماطم', brandEn: 'Al Ain',   brandAr: 'العين',    weight: '200g', today: 8.00,   yesterday: 9.00,   category: 'tomato', icon: '🥫' },
+  1462→  1462→      { id: 6,  nameEn: 'Tomato Paste',       nameAr: 'صلصة طماطم', brandEn: 'El Wadi',  brandAr: 'الوادي',   weight: '200g', today: 7.50,   yesterday: 8.50,   category: 'tomato', icon: '🥫' },
+  1463→  1463→      { id: 7,  nameEn: 'Cooking Oil',        nameAr: 'زيت طعام',   brandEn: 'Crystal',  brandAr: 'كريستال',  weight: '1L',   today: 65.00,  yesterday: 70.00,  category: 'oil',    icon: '🫒' },
+  1464→  1464→      { id: 8,  nameEn: 'Cooking Oil',        nameAr: 'زيت طعام',   brandEn: 'El Hanim', brandAr: 'الخانم',   weight: '1L',   today: 63.00,  yesterday: 68.00,  category: 'oil',    icon: '🫒' },
+  1465→  1465→      { id: 9,  nameEn: 'Sugar',              nameAr: 'سكر',        brandEn: 'Local',    brandAr: 'محلي',     weight: '1kg',  today: 22.00,  yesterday: 24.00,  category: 'sugar',  icon: '🍬' },
+  1466→  1466→      { id: 10, nameEn: 'Tea',                nameAr: 'شاي',        brandEn: 'Local',    brandAr: 'محلي',     weight: '250g', today: 18.00,  yesterday: 20.00,  category: 'tea',    icon: '🍵' }
+  1467→  1467→    ];
+  1468→  1468→
+  1469→  1469→    const HOT_DEALS = [
+  1470→  1470→      { id: 'd1', nameEn: 'Premium Rice 5kg',       nameAr: 'أرز ممتاز 5 كيلو',    icon: '🍚', price: 99.00,  original: 115.00, discount: '-14%' },
+  1471→  1471→      { id: 'd2', nameEn: 'Pasta (Buy 2)',           nameAr: 'مكرونة (اشتري 2)',     icon: '🍝', price: 25.00,  original: 30.00,  discount: '-17%' },
+  1472→  1472→      { id: 'd3', nameEn: 'Cooking Oil',             nameAr: 'زيت طعام',             icon: '🫒', price: 55.00,  original: 70.00,  discount: '-21%' },
+  1473→  1473→      { id: 'd4', nameEn: 'Sugar 2kg',               nameAr: 'سكر 2 كيلو',           icon: '🍬', price: 38.00,  original: 48.00,  discount: '-21%' }
+  1474→  1474→    ];
+  1475→  1475→
+  1476→  1476→    /* Sections to render products in (ordered) */
+  1477→  1477→    const SECTION_ORDER = ['rice', 'pasta', 'oil', 'tomato', 'sugar', 'tea'];
+  1478→  1478→
+  1479→  1479→    /* ============================================
+  1480→  1480→       i18n TRANSLATIONS
+  1481→  1481→       ============================================ */
+  1482→  1482→    const I18N = {
+  1483→  1483→      logoSub:             { en: 'Gomla Go Home',              ar: 'جملة جو هوم' },
+  1484→  1484→      searchPlaceholder:   { en: 'Search products, brands...',  ar: 'ابحث عن منتجات، ماركات...' },
+  1485→  1485→      heroTitle:           { en: 'Wholesale Prices,<br>Delivered to Your Door', ar: 'أسعار الجملة،<br>توصيل لباب بيتك' },
+  1486→  1486→      heroSubtitle:        { en: 'GGH Gomla Go Home brings B2B wholesale commodity prices directly to households. Rice, oil, sugar, pasta and more — at prices you won\'t find in retail stores.', ar: 'GGH جملة جو هوم يجلب أسعار الجملة مباشرة للبيوت. أرز، زيت، سكر، مكرونة وأكثر — بأسعار لن تجدها في المحلات.' },
+  1487→  1487→      heroCta:             { en: 'Shop Now',                   ar: 'تسوق الآن' },
+  1488→  1488→      categoriesTitle:     { en: 'Shop by Category',           ar: 'تسوق حسب الفئة' },
+  1489→  1489→      hotDealsTitle:       { en: 'Hot Deals',                  ar: 'عروض ساخنة' },
+  1490→  1490→      viewAll:             { en: 'View All →',                 ar: '← عرض الكل' },
+  1491→  1491→      addToCart:           { en: 'Add to Cart',                ar: 'أضف للسلة' },
+  1492→  1492→      added:               { en: '✓ Added',                    ar: '✓ تمت الإضافة' },
+  1493→  1493→      today:               { en: 'Today',                      ar: 'اليوم' },
+  1494→  1494→      was:                 { en: 'Was',                        ar: 'كان' },
+  1495→  1495→      cartTitle:            { en: 'Your Cart',                  ar: 'سلتك' },
+  1496→  1496→      cartEmpty:            { en: 'Your cart is empty',         ar: 'سلتك فارغة' },
+  1497→  1497→      cartSubtotal:         { en: 'Subtotal',                   ar: 'المجموع الفرعي' },
+  1498→  1498→      cartDelivery:         { en: 'Delivery',                   ar: 'التوصيل' },
+  1499→  1499→      cartFree:             { en: 'Free',                       ar: 'مجاني' },
+  1500→  1500→      cartTotal:            { en: 'Total',                      ar: 'الإجمالي' },
+  1501→  1501→      cartCheckout:         { en: 'Proceed to Checkout',        ar: 'إتمام الشراء' },
+  1502→  1502→      footerBrandDesc:      { en: 'Gomla Go Home — Bringing wholesale commodity prices directly to Egyptian households. Quality products, wholesale prices.', ar: 'جملة جو هوم — جلب أسعار الجملة مباشرة للبيوت المصرية. جودة عالية، أسعار الجملة.' },
+  1503→  1503→      footerQuickLinks:     { en: 'Quick Links',                ar: 'روابط سريعة' },
+  1504→  1504→      footerAbout:          { en: 'About Us',                   ar: 'من نحن' },
+  1505→  1505→      footerHow:            { en: 'How It Works',               ar: 'كيف يعمل' },
+  1506→  1506→      footerDelivery:       { en: 'Delivery Info',              ar: 'معلومات التوصيل' },
+  1507→  1507→      footerReturns:        { en: 'Returns Policy',             ar: 'سياسة الاسترجاع' },
+  1508→  1508→      footerContact:        { en: 'Contact',                    ar: 'تواصل' },
+  1509→  1509→      footerAddress:        { en: 'Cairo, Egypt',               ar: 'القاهرة، مصر' },
+  1510→  1510→      footerFollow:         { en: 'Follow Us',                  ar: 'تابعنا' },
+  1511→  1511→      footerCopy:           { en: '© 2025 GGH Gomla Go Home. All rights reserved.', ar: '© 2025 GGH جملة جو هوم. جميع الحقوق محفوظة.' },
+  1512→  1512→      /* Mobile menu */
+  1513→  1513→      menuHome:             { en: 'Home',                       ar: 'الرئيسية' },
+  1514→  1514→      menuCategories:       { en: 'Categories',                 ar: 'الفئات' },
+  1515→  1515→      menuDeals:            { en: 'Hot Deals',                  ar: 'عروض ساخنة' },
+  1516→  1516→      menuCart:             { en: 'Cart',                       ar: 'السلة' },
+  1517→  1517→      menuContact:          { en: 'Contact',                    ar: 'تواصل' }
+  1518→  1518→    };
+  1519→  1519→
+  1520→  1520→    /* ============================================
+  1521→  1521→       STATE
+  1522→  1522→       ============================================ */
+  1523→  1523→    let lang = localStorage.getItem('ggh-lang') || 'en';
+  1524→  1524→    let cart = []; // { product, qty }
+  1525→  1525→
+  1526→  1526→    /* ============================================
+  1527→  1527→       LANGUAGE TOGGLE
+  1528→  1528→       ============================================ */
+  1529→  1529→    function setLanguage(newLang) {
+  1530→  1530→      lang = newLang;
+  1531→  1531→      localStorage.setItem('ggh-lang', lang);
+  1532→  1532→      const html = document.documentElement;
+  1533→  1533→      html.setAttribute('lang', lang === 'ar' ? 'ar' : 'en');
+  1534→  1534→      html.setAttribute('dir', lang === 'ar' ? 'rtl' : 'ltr');
+  1535→  1535→      document.getElementById('langToggle').textContent = lang === 'ar' ? 'EN' : 'AR';
+  1536→  1536→
+  1537→  1537→      /* Update all data-i18n elements */
+  1538→  1538→      document.querySelectorAll('[data-i18n]').forEach(el => {
+  1539→  1539→        const key = el.getAttribute('data-i18n');
+  1540→  1540→        if (I18N[key] && I18N[key][lang]) {
+  1541→  1541→          el.innerHTML = I18N[key][lang];
+  1542→  1542→        }
+  1543→  1543→      });
+  1544→  1544→
+  1545→  1545→      /* Update placeholders */
+  1546→  1546→      document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+  1547→  1547→        const key = el.getAttribute('data-i18n-placeholder');
+  1548→  1548→        if (I18N[key] && I18N[key][lang]) {
+  1549→  1549→          el.placeholder = I18N[key][lang];
+  1550→  1550→        }
+  1551→  1551→      });
+  1552→  1552→
+  1553→  1553→      /* Re-render dynamic content */
+  1554→  1554→      renderCategories();
+  1555→  1555→      renderHotDeals();
+  1556→  1556→      renderProductSections();
+  1557→  1557→      renderMobileMenu();
+  1558→  1558→      renderCart();
+  1559→  1559→    }
+  1560→  1560→
+  1561→  1561→    document.getElementById('langToggle').addEventListener('click', () => {
+  1562→  1562→      setLanguage(lang === 'en' ? 'ar' : 'en');
+  1563→  1563→    });
+  1564→  1564→
+  1565→  1565→    /* ============================================
+  1566→  1566→       CATEGORIES
+  1567→  1567→       ============================================ */
+  1568→  1568→    function renderCategories() {
+  1569→  1569→      const container = document.getElementById('categoriesScroll');
+  1570→  1570→      container.innerHTML = CATEGORIES.map(cat => `
+  1571→  1571→        <div class="category-item" role="listitem">
+  1572→  1572→          <div class="category-circle">${cat.icon}</div>
+  1573→  1573→          <span class="category-name">${cat[lang]}</span>
+  1574→  1574→        </div>
+  1575→  1575→      `).join('');
+  1576→  1576→    }
+  1577→  1577→
+  1578→  1578→    /* ============================================
+  1579→  1579→       HOT DEALS
+  1580→  1580→       ============================================ */
+  1581→  1581→    function renderHotDeals() {
+  1582→  1582→      const container = document.getElementById('dealsScroll');
+  1583→  1583→      container.innerHTML = HOT_DEALS.map(deal => `
+  1584→  1584→        <div class="deal-card" role="listitem">
+  1585→  1585→          <span class="discount-pill">${deal.discount}</span>
+  1586→  1586→          <div class="deal-emoji">${deal.icon}</div>
+  1587→  1587→          <div class="deal-name">${deal[lang === 'ar' ? 'nameAr' : 'nameEn']}</div>
+  1588→  1588→          <div class="deal-original">${deal.original.toFixed(2)} EGP</div>
+  1589→  1589→          <div class="deal-price">${deal.price.toFixed(2)} <span class="currency">EGP</span></div>
+  1590→  1590→        </div>
+  1591→  1591→      `).join('');
+  1592→  1592→    }
+  1593→  1593→
+  1594→  1594→    /* ============================================
+  1595→  1595→       PRODUCT SECTIONS
+  1596→  1596→       ============================================ */
+  1597→  1597→    function renderProductSections() {
+  1598→  1598→      const container = document.getElementById('products');
+  1599→  1599→      const catMap = {};
+  1600→  1600→      CATEGORIES.forEach(c => { catMap[c.id] = c; });
+  1601→  1601→
+  1602→  1602→      let html = '';
+  1603→  1603→      SECTION_ORDER.forEach(catId => {
+  1604→  1604→        const cat = catMap[catId];
+  1605→  1605→        if (!cat) return;
+  1606→  1606→        const products = PRODUCTS.filter(p => p.category === catId);
+  1607→  1607→        if (products.length === 0) return;
+  1608→  1608→
+  1609→  1609→        const sectionTitle = cat[lang];
+  1610→  1610→        const viewAllText = I18N.viewAll[lang];
+  1611→  1611→
+  1612→  1612→        html += `
+  1613→  1613→          <section class="product-section" aria-label="${sectionTitle}">
+  1614→  1614→            <div class="section-inner">
+  1615→  1615→              <div class="section-header">
+  1616→  1616→                <div class="section-title-group">
+  1617→  1617→                  <div class="section-accent-bar"></div>
+  1618→  1618→                  <h2 class="section-title">${sectionTitle}</h2>
+  1619→  1619→                </div>
+  1620→  1620→                <a href="#" class="section-view-all">${viewAllText}</a>
+  1621→  1621→              </div>
+  1622→  1622→              <div class="products-scroll" role="list">
+  1623→  1623→                ${products.map(p => renderProductCard(p)).join('')}
+  1624→  1624→              </div>
+  1625→  1625→            </div>
+  1626→  1626→          </section>
+  1627→  1627→        `;
+  1628→  1628→      });
+  1629→  1629→
+  1630→  1630→      container.innerHTML = html;
+  1631→  1631→
+  1632→  1632→      /* Attach add-to-cart handlers */
+  1633→  1633→      container.querySelectorAll('.add-to-cart-btn').forEach(btn => {
+  1634→  1634→        btn.addEventListener('click', function() {
+  1635→  1635→          const productId = parseInt(this.getAttribute('data-product-id'));
+  1636→  1636→          addToCart(productId, this);
+  1637→  1637→        });
+  1638→  1638→      });
+  1639→  1639→    }
+  1640→  1640→
+  1641→  1641→    function renderProductCard(p) {
+  1642→  1642→      const name = lang === 'ar' ? p.nameAr : p.nameEn;
+  1643→  1643→      const brand = lang === 'ar' ? p.brandAr : p.brandEn;
+  1644→  1644→      const discountPct = Math.round((1 - p.today / p.yesterday) * 100);
+  1645→  1645→      const todayLabel = I18N.today[lang];
+  1646→  1646→      const wasLabel = I18N.was[lang];
+  1647→  1647→      const addLabel = I18N.addToCart[lang];
+  1648→  1648→
+  1649→  1649→      return `
+  1650→  1650→        <div class="product-card" role="listitem">
+  1651→  1651→          <div class="product-emoji-circle">${p.icon}</div>
+  1652→  1652→          <div class="product-name">${name}</div>
+  1653→  1653→          <div class="product-meta">${brand} · ${p.weight}</div>
+  1654→  1654→          <div class="product-divider"></div>
+  1655→  1655→          <div class="product-price-row">
+  1656→  1656→            <span class="product-price-today">${p.today.toFixed(2)} <span class="currency">EGP</span></span>
+  1657→  1657→          </div>
+  1658→  1658→          <div class="product-price-was-row">
+  1659→  1659→            <span class="product-price-was">${p.yesterday.toFixed(2)}</span>
+  1660→  1660→            <span class="product-drop-pill">↓ -${discountPct}%</span>
+  1661→  1661→          </div>
+  1662→  1662→          <button class="add-to-cart-btn" data-product-id="${p.id}">${addLabel}</button>
+  1663→  1663→        </div>
+  1664→  1664→      `;
+  1665→  1665→    }
+  1666→  1666→
+  1667→  1667→    /* ============================================
+  1668→  1668→       CART LOGIC
+  1669→  1669→       ============================================ */
+  1670→  1670→    function addToCart(productId, btnEl) {
+  1671→  1671→      const product = PRODUCTS.find(p => p.id === productId);
+  1672→  1672→      if (!product) return;
+  1673→  1673→
+  1674→  1674→      const existing = cart.find(item => item.product.id === productId);
+  1675→  1675→      if (existing) {
+  1676→  1676→        existing.qty++;
+  1677→  1677→      } else {
+  1678→  1678→        cart.push({ product, qty: 1 });
+  1679→  1679→      }
+  1680→  1680→
+  1681→  1681→      /* Button feedback */
+  1682→  1682→      if (btnEl) {
+  1683→  1683→        const originalText = btnEl.textContent;
+  1684→  1684→        btnEl.textContent = I18N.added[lang];
+  1685→  1685→        btnEl.classList.add('added');
+  1686→  1686→        setTimeout(() => {
+  1687→  1687→          btnEl.textContent = originalText;
+  1688→  1688→          btnEl.classList.remove('added');
+  1689→  1689→        }, 1200);
+  1690→  1690→      }
+  1691→  1691→
+  1692→  1692→      updateCartBadge();
+  1693→  1693→      renderCart();
+  1694→  1694→    }
+  1695→  1695→
+  1696→  1696→    function removeFromCart(productId) {
+  1697→  1697→      cart = cart.filter(item => item.product.id !== productId);
+  1698→  1698→      updateCartBadge();
+  1699→  1699→      renderCart();
+  1700→  1700→    }
+  1701→  1701→
+  1702→  1702→    function updateQty(productId, delta) {
+  1703→  1703→      const item = cart.find(i => i.product.id === productId);
+  1704→  1704→      if (!item) return;
+  1705→  1705→      item.qty += delta;
+  1706→  1706→      if (item.qty <= 0) {
+  1707→  1707→        removeFromCart(productId);
+  1708→  1708→        return;
+  1709→  1709→      }
+  1710→  1710→      renderCart();
+  1711→  1711→    }
+  1712→  1712→
+  1713→  1713→    function updateCartBadge() {
+  1714→  1714→      const badge = document.getElementById('cartBadge');
+  1715→  1715→      const total = cart.reduce((sum, item) => sum + item.qty, 0);
+  1716→  1716→      badge.textContent = total;
+  1717→  1717→      badge.classList.toggle('visible', total > 0);
+  1718→  1718→    }
+  1719→  1719→
+  1720→  1720→    function renderCart() {
+  1721→  1721→      const container = document.getElementById('cartItems');
+  1722→  1722→
+  1723→  1723→      if (cart.length === 0) {
+  1724→  1724→        container.innerHTML = `
+  1725→  1725→          <div class="cart-empty">
+  1726→  1726→            <div class="cart-empty-icon">🛒</div>
+  1727→  1727→            <p>${I18N.cartEmpty[lang]}</p>
+  1728→  1728→          </div>
+  1729→  1729→        `;
+  1730→  1730→        document.getElementById('cartSubtotal').textContent = '0.00 EGP';
+  1731→  1731→        document.getElementById('cartTotal').textContent = '0.00 EGP';
+  1732→  1732→        return;
+  1733→  1733→      }
+  1734→  1734→
+  1735→  1735→      let subtotal = 0;
+  1736→  1736→      container.innerHTML = cart.map(item => {
+  1737→  1737→        const p = item.product;
+  1738→  1738→        const name = lang === 'ar' ? p.nameAr : p.nameEn;
+  1739→  1739→        const brand = lang === 'ar' ? p.brandAr : p.brandEn;
+  1740→  1740→        const lineTotal = p.today * item.qty;
+  1741→  1741→        subtotal += lineTotal;
+  1742→  1742→
+  1743→  1743→        return `
+  1744→  1744→          <div class="cart-item">
+  1745→  1745→            <div class="cart-item-emoji">${p.icon}</div>
+  1746→  1746→            <div class="cart-item-info">
+  1747→  1747→              <div class="cart-item-name">${name} · ${brand}</div>
+  1748→  1748→              <div class="cart-item-price">${p.today.toFixed(2)} EGP × ${item.qty} = ${lineTotal.toFixed(2)} EGP</div>
+  1749→  1749→            </div>
+  1750→  1750→            <div class="cart-item-controls">
+  1751→  1751→              <button class="cart-qty-btn" onclick="updateQty(${p.id}, -1)" aria-label="Decrease quantity">−</button>
+  1752→  1752→              <span class="cart-qty">${item.qty}</span>
+  1753→  1753→              <button class="cart-qty-btn" onclick="updateQty(${p.id}, 1)" aria-label="Increase quantity">+</button>
+  1754→  1754→              <button class="cart-item-remove" onclick="removeFromCart(${p.id})" aria-label="Remove item">
+  1755→  1755→                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+  1756→  1756→              </button>
+  1757→  1757→            </div>
+  1758→  1758→          </div>
+  1759→  1759→        `;
+  1760→  1760→      }).join('');
+  1761→  1761→
+  1762→  1762→      document.getElementById('cartSubtotal').textContent = subtotal.toFixed(2) + ' EGP';
+  1763→  1763→      document.getElementById('cartTotal').textContent = subtotal.toFixed(2) + ' EGP';
+  1764→  1764→    }
+  1765→  1765→
+  1766→  1766→    /* Cart open/close */
+  1767→  1767→    document.getElementById('cartBtn').addEventListener('click', () => {
+  1768→  1768→      document.getElementById('cartOverlay').classList.add('open');
+  1769→  1769→      document.body.style.overflow = 'hidden';
+  1770→  1770→    });
+  1771→  1771→
+  1772→  1772→    document.getElementById('cartCloseBtn').addEventListener('click', closeCart);
+  1773→  1773→
+  1774→  1774→    document.getElementById('cartOverlay').addEventListener('click', (e) => {
+  1775→  1775→      if (e.target === e.currentTarget) closeCart();
+  1776→  1776→    });
+  1777→  1777→
+  1778→  1778→    function closeCart() {
+  1779→  1779→      document.getElementById('cartOverlay').classList.remove('open');
+  1780→  1780→      document.body.style.overflow = '';
+  1781→  1781→    }
+  1782→  1782→
+  1783→  1783→    /* ============================================
+  1784→  1784→       MOBILE MENU
+  1785→  1785→       ============================================ */
+  1786→  1786→    function renderMobileMenu() {
+  1787→  1787→      const links = document.getElementById('mobileMenuLinks');
+  1788→  1788→      const items = [
+  1789→  1789→        { key: 'menuHome',       icon: '🏠', href: '#' },
+  1790→  1790→        { key: 'menuCategories', icon: '📦', href: '#' },
+  1791→  1791→        { key: 'menuDeals',      icon: '🔥', href: '#' },
+  1792→  1792→        { key: 'menuCart',       icon: '🛒', href: '#', action: () => { closeMobileMenu(); document.getElementById('cartOverlay').classList.add('open'); } },
+  1793→  1793→        { key: 'menuContact',    icon: '📞', href: '#' }
+  1794→  1794→      ];
+  1795→  1795→
+  1796→  1796→      links.innerHTML = items.map((item, i) => {
+  1797→  1797→        return `<a href="${item.href}" data-mobile-menu-index="${i}"><span class="mm-icon">${item.icon}</span>${I18N[item.key][lang]}</a>`;
+  1798→  1798→      }).join('');
+  1799→  1799→
+  1800→  1800→      /* Attach handlers for cart item */
+  1801→  1801→      links.querySelectorAll('a').forEach(a => {
+  1802→  1802→        const idx = parseInt(a.getAttribute('data-mobile-menu-index'));
+  1803→  1803→        if (items[idx] && items[idx].action) {
+  1804→  1804→          a.addEventListener('click', (e) => {
+  1805→  1805→            e.preventDefault();
+  1806→  1806→            items[idx].action();
+  1807→  1807→          });
+  1808→  1808→        } else {
+  1809→  1809→          a.addEventListener('click', () => closeMobileMenu());
+  1810→  1810→        }
+  1811→  1811→      });
+  1812→  1812→    }
+  1813→  1813→
+  1814→  1814→    document.getElementById('mobileMenuBtn').addEventListener('click', () => {
+  1815→  1815→      const overlay = document.getElementById('mobileMenu');
+  1816→  1816→      overlay.style.display = 'block';
+  1817→  1817→      requestAnimationFrame(() => overlay.classList.add('open'));
+  1818→  1818→    });
+  1819→  1819→
+  1820→  1820→    document.getElementById('mobileMenuClose').addEventListener('click', closeMobileMenu);
+  1821→  1821→
+  1822→  1822→    document.getElementById('mobileMenu').addEventListener('click', (e) => {
+  1823→  1823→      if (e.target === e.currentTarget) closeMobileMenu();
+  1824→  1824→    });
+  1825→  1825→
+  1826→  1826→    function closeMobileMenu() {
+  1827→  1827→      const overlay = document.getElementById('mobileMenu');
+  1828→  1828→      overlay.classList.remove('open');
+  1829→  1829→      setTimeout(() => { overlay.style.display = 'none'; }, 300);
+  1830→  1830→    }
+  1831→  1831→
+  1832→  1832→    /* ============================================
+  1833→  1833→       COUNTDOWN TIMER (3 hours)
+  1834→  1834→       ============================================ */
+  1835→  1835→    let countdownEnd = Date.now() + 3 * 60 * 60 * 1000;
+  1836→  1836→
+  1837→  1837→    function updateCountdown() {
+  1838→  1838→      const remaining = Math.max(0, countdownEnd - Date.now());
+  1839→  1839→      const hours   = Math.floor(remaining / 3600000);
+  1840→  1840→      const minutes = Math.floor((remaining % 3600000) / 60000);
+  1841→  1841→      const seconds = Math.floor((remaining % 60000) / 1000);
+  1842→  1842→
+  1843→  1843→      document.getElementById('cdHours').textContent   = String(hours).padStart(2, '0');
+  1844→  1844→      document.getElementById('cdMinutes').textContent = String(minutes).padStart(2, '0');
+  1845→  1845→      document.getElementById('cdSeconds').textContent = String(seconds).padStart(2, '0');
+  1846→  1846→
+  1847→  1847→      if (remaining <= 0) {
+  1848→  1848→        /* Reset for demo */
+  1849→  1849→        countdownEnd = Date.now() + 3 * 60 * 60 * 1000;
+  1850→  1850→      }
+  1851→  1851→    }
+  1852→  1852→
+  1853→  1853→    setInterval(updateCountdown, 1000);
+  1854→  1854→    updateCountdown();
+  1855→  1855→
+  1856→  1856→    /* ============================================
+  1857→  1857→       SMOOTH SCROLL
+  1858→  1858→       ============================================ */
+  1859→  1859→    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+  1860→  1860→      anchor.addEventListener('click', function(e) {
+  1861→  1861→        const target = document.querySelector(this.getAttribute('href'));
+  1862→  1862→        if (target) {
+  1863→  1863→          e.preventDefault();
+  1864→  1864→          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  1865→  1865→        }
+  1866→  1866→      });
+  1867→  1867→    });
+  1868→  1868→
+  1869→  1869→    /* ============================================
+  1870→  1870→       INIT
+  1871→  1871→       ============================================ */
+  1872→  1872→    setLanguage(lang);
+  1873→  1873→  </script>
+  1874→  1874→</body>
+  1875→  1875→</html>
+  1876→  1876→
