@@ -1,0 +1,1309 @@
+     1→# 02 — Architecture
+     2→
+     3→> **GGH — Gomla Go Home** — System architecture, service responsibilities, communication patterns, and data flow.
+     4→
+     5→---
+     6→
+     7→## Table of Contents
+     8→
+     9→1. [Architecture Overview](#1-architecture-overview)
+    10→2. [Service Inventory](#2-service-inventory)
+    11→3. [Next.js — Frontend & API Gateway](#3-nextjs--frontend--api-gateway)
+    12→4. [Medusa v2 — Commerce Engine](#4-medusa-v2--commerce-engine)
+    13→5. [PostgreSQL — Primary Database](#5-postgresql--primary-database)
+    14→6. [Redis — Cache, Queue & Session Store](#6-redis--cache-queue--session-store)
+    15→7. [BullMQ — Job Processing](#7-bullmq--job-processing)
+    16→8. [ERPNext — ERP System](#8-erpnext--erp-system)
+    17→9. [Docker — Containerization](#9-docker--containerization)
+    18→10. [Inter-Service Communication](#10-inter-service-communication)
+    19→11. [Data Flow](#11-data-flow)
+    20→12. [Failure Modes & Degradation](#12-failure-modes--degradation)
+    21→13. [Security Boundaries](#13-security-boundaries)
+    22→14. [Architectural Decision Records](#14-architectural-decision-records)
+    23→
+    24→---
+    25→
+    26→## 1. Architecture Overview
+    27→
+    28→GGH follows a **service-oriented architecture** with four deployable services sharing a database and message queue. Each service owns a bounded context. Communication is asynchronous by default, synchronous only when latency demands it.
+    29→
+    30→```
+    31→┌─────────────────────────────────────────────────────────────────────────┐
+    32→│                            CLIENT LAYER                                 │
+    33→│                                                                         │
+    34→│   ┌────────────────┐   ┌────────────────┐   ┌────────────────────┐     │
+    35→│   │  Web Browser   │   │  Mobile (Future)│   │  Admin Dashboard   │     │
+    36→│   │  SSR + Hydrate │   │  React Native  │   │  Medusa Admin UI   │     │
+    37→│   └───────┬────────┘   └───────┬────────┘   └────────┬───────────┘     │
+    38→└───────────┼────────────────────┼──────────────────────┼─────────────────┘
+    39→            │                    │                      │
+    40→            │  HTTPS             │  HTTPS               │  HTTPS
+    41→            ▼                    ▼                      ▼
+    42→┌─────────────────────────────────────────────────────────────────────────┐
+    43→│                     NEXT.JS  (Port 3000)                                │
+    44→│                     Frontend + BFF + API Gateway                        │
+    45→│                                                                         │
+    46→│   ┌─────────────┐  ┌──────────────┐  ┌─────────────┐  ┌────────────┐  │
+    47→│   │  React 19   │  │  API Routes  │  │  ISR Cache  │  │  Session   │  │
+    48→│   │  Server     │  │  /api/*      │  │  (File +    │  │  Manager   │  │
+    49→│   │  Components │  │  (BFF Layer) │  │   Redis)    │  │  (Redis)   │  │
+    50→│   └─────────────┘  └──────┬───────┘  └─────────────┘  └────────────┘  │
+    51→│                           │                                             │
+    52→└───────────────────────────┼─────────────────────────────────────────────┘
+    53→                            │
+    54→              ┌─────────────┼──────────────┐
+    55→              │             │              │
+    56→              ▼             ▼              ▼
+    57→┌──────────────────┐ ┌──────────────┐ ┌──────────────────┐
+    58→│   MEDUSA v2      │ │   BullMQ     │ │   ERPNext        │
+    59→│   (Port 9000)    │ │   Worker     │ │   (Port 8000)    │
+    60→│                  │ │   (Process)  │ │                  │
+    61→│  ┌────────────┐  │ │              │ │  ┌────────────┐  │
+    62→│  │ Product    │  │ │  ┌────────┐  │ │  │ Item       │  │
+    63→│  │ Module     │  │ │  │ ERP    │  │ │  │ Master     │  │
+    64→│  ├────────────┤  │ │  │ Sync   │  │ │  ├────────────┤  │
+    65→│  │ Pricing    │  │ │  ├────────┤  │ │  │ Stock      │  │
+    66→│  │ Module     │  │ │  │ Order  │  │ │  │ Ledger     │  │
+    67→│  ├────────────┤  │ │  │ Push   │  │ │  ├────────────┤  │
+    68→│  │ Order      │  │ │  ├────────┤  │ │  │ Sales      │  │
+    69→│  │ Module     │  │ │  │ Notif- │  │ │  │ Order      │  │
+    70→│  ├────────────┤  │ │  │ icat-  │  │ │  ├────────────┤  │
+    71→│  │ Customer   │  │ │  │ ions   │  │ │  │ Purchasing │  │
+    72→│  │ Module     │  │ │  ├────────┤  │ │  ├────────────┤  │
+    73→│  ├────────────┤  │ │  │ Cache  │  │ │  │ Accounts   │  │
+    74→│  │ Payment    │  │ │  │ Inval- │  │ │  │ & Finance  │  │
+    75→│  │ Module     │  │ │  │ idate  │  │ │  └────────────┘  │
+    76→│  ├────────────┤  │ │  └────────┘  │ │                  │
+    77→│  │ Shipping   │  │ │              │ │  MariaDB/         │
+    78→│  │ Module     │  │ │              │ │  PostgreSQL       │
+    79→│  ├────────────┤  │ │              │ │  (ERP DB)         │
+    80→│  │ Inventory  │  │ │              │ │                  │
+    81→│  │ Module     │  │ │              │ │                  │
+    82→│  └────────────┘  │ │              │ │                  │
+    83→└───────┬──────────┘ └──────┬───────┘ └──────────────────┘
+    84→        │                   │
+    85→        ▼                   ▼
+    86→┌──────────────────┐ ┌──────────────┐
+    87→│  PostgreSQL 16   │ │   Redis 7    │
+    88→│  (Primary DB)    │ │              │
+    89→│                  │ │ ┌──────────┐ │
+    90→│  ┌────────────┐  │ │ │ Cache    │ │
+    91→│  │ medusa     │  │ │ │ (TTL)    │ │
+    92→│  │ schema     │  │ │ ├──────────┤ │
+    93→│  ├────────────┤  │ │ │ Session  │ │
+    94→│  │ ggh        │  │ │ │ Store    │ │
+    95→│  │ schema     │  │ │ ├──────────┤ │
+    96→│  └────────────┘  │ │ │ BullMQ   │ │
+    97→│                  │ │ │ Queues   │ │
+    98→└──────────────────┘ │ └──────────┘ │
+    99→                     └──────────────┘
+   100→```
+   101→
+   102→### Design Principles Reflected in Architecture
+   103→
+   104→| Architectural Choice | Vision Alignment |
+   105→|---|---|
+   106→| **SSR via Next.js** | Om Ibrahim sees content immediately. No blank screen while JavaScript loads. |
+   107→| **BFF pattern** | Mobile and web get tailored responses. No over-fetching. Elder-friendly means fast, even on slow connections. |
+   108→| **ERP as source of truth** | Honest prices come from accounting, not from a product manager's spreadsheet. Trust over convenience. |
+   109→| **Async job processing** | Orders never fail because ERP is slow. The queue absorbs spikes. Reliability over speed. |
+   110→| **Redis caching layer** | Product pages load from memory, not disk. Speed is an accessibility feature. |
+   111→| **Docker isolation** | Every service can be restarted independently. No single deployment takes down the whole platform. |
+   112→
+   113→---
+   114→
+   115→## 2. Service Inventory
+   116→
+   117→| Service | Port | Role | Lifecycle |
+   118→|---|---|---|---|
+   119→| **Next.js** | 3000 | Frontend rendering, API gateway, BFF, session management | Long-running HTTP server |
+   120→| **Medusa v2** | 9000 | Commerce engine: products, pricing, orders, customers, payments, shipping | Long-running HTTP server |
+   121→| **BullMQ Worker** | — (no HTTP port) | Background job processing: ERP sync, notifications, cache invalidation | Long-running Node.js process |
+   122→| **ERPNext** | 8000 | ERP: accounting, inventory truth, procurement, VAT | Long-running Python/Gunicorn server |
+   123→| **PostgreSQL** | 5432 | Persistent data store for Medusa and GGH operational data | Long-running database |
+   124→| **Redis** | 6379 | Cache, session store, BullMQ queue backend | Long-running in-memory store |
+   125→
+   126→### Dependency Graph
+   127→
+   128→```
+   129→Next.js ──depends on──► Medusa (API)
+   130→       ──depends on──► Redis (session, cache)
+   131→
+   132→Medusa ──depends on──► PostgreSQL (data)
+   133→       ──depends on──► Redis (internal cache, event bus)
+   134→
+   135→BullMQ Worker ──depends on──► Redis (queue)
+   136→              ──depends on──► Medusa (Admin API)
+   137→              ──depends on──► ERPNext (REST API)
+   138→              ──depends on──► PostgreSQL (audit log)
+   139→              ──depends on──► Next.js (ISR revalidation webhook)
+   140→
+   141→ERPNext ──depends on──► MariaDB/PostgreSQL (own database)
+   142→         ──webhooks──► Next.js (optional push notifications)
+   143→```
+   144→
+   145→### Startup Order
+   146→
+   147→```
+   148→1. PostgreSQL   (data foundation — must be ready first)
+   149→2. Redis        (queue foundation — must be ready before workers)
+   150→3. ERPNext      (slow startup ~60s; start early)
+   151→4. Medusa       (depends on PostgreSQL + Redis)
+   152→5. BullMQ Worker (depends on Redis + Medusa + ERPNext)
+   153→6. Next.js      (depends on Medusa + Redis; start last)
+   154→```
+   155→
+   156→---
+   157→
+   158→## 3. Next.js — Frontend & API Gateway
+   159→
+   160→### 3.1 Role
+   161→
+   162→Next.js serves three functions in one deployable unit:
+   163→
+   164→| Function | Why It Lives Here |
+   165→|---|---|
+   166→| **Server-rendered frontend** | Product pages, category pages, and the homepage render on the server as HTML. The browser receives a complete page — no spinner, no skeleton, no "loading..." for the initial view. This is critical for Om Ibrahim on a slow 3G connection. |
+   167→| **BFF (Backend-for-Frontend)** | API route handlers in `/api/*` transform and aggregate Medusa responses into the exact shape the frontend needs. The browser never calls Medusa directly. This hides internal APIs, reduces payload size, and centralizes auth. |
+   168→| **API Gateway** | Rate limiting, input validation, CSRF protection, and request logging all happen at the API route level before any call reaches Medusa or ERPNext. |
+   169→
+   170→### 3.2 Rendering Strategy
+   171→
+   172→| Page | Strategy | Why |
+   173→|---|---|---|
+   174→| `/` (homepage) | ISR, 60-second revalidation | High traffic, semi-static content (categories, deals), fast initial load |
+   175→| `/categories/[slug]` | ISR, 60-second revalidation | Product listings change slowly; cache aggressively |
+   176→| `/products/[handle]` | ISR, 60-second revalidation + on-demand revalidation via webhook | Product details rarely change; instant update when ERP syncs a price change |
+   177→| `/cart` | Client-rendered (dynamic) | Cart is user-specific and interactive. SSR would leak data. |
+   178→| `/checkout` | Client-rendered (dynamic) | Payment and shipping forms are fully interactive. |
+   179→| `/account/*` | Client-rendered with RSC shell | Authenticated pages. Server renders the layout, client handles the interactive parts. |
+   180→| `/api/*` | No rendering (JSON) | Pure API endpoints. |
+   181→
+   182→### 3.3 Caching Layers
+   183→
+   184→```
+   185→Request
+   186→  │
+   187→  ├─── Browser Cache (SWR via TanStack Query)
+   188→  │     staleTime: 30s for product lists
+   189→  │     cacheTime: 5 min
+   190→  │
+   191→  ├─── Next.js Data Cache (fetch calls)
+   192→  │     revalidate: 60s (ISR)
+   193→  │     tags: ["products", "categories", "deals"]
+   194→  │     Invalidation: revalidateTag() called by webhook
+   195→  │
+   196→  ├─── Next.js Full Route Cache
+   197→  │     Duration: 60s
+   198→  │     Invalidation: revalidatePath() called by webhook
+   199→  │
+   200→  ├─── Redis Cache (application-level)
+   201→  │     Key patterns:
+   202→  │       cache:products:category:<slug>  TTL: 300s
+   203→  │       cache:products:search:<query>   TTL: 120s
+   204→  │       cache:deals:active              TTL: 60s
+   205→  │     Invalidation: BullMQ cache.invalidate job
+   206→  │
+   207→  └─── Medusa (source of truth for storefront data)
+   208→```
+   209→
+   210→### 3.4 Session Architecture
+   211→
+   212→| Aspect | Detail |
+   213→|---|---|
+   214→| **Session ID** | Cryptographically random, 256-bit, stored in `__ggh_sess` cookie |
+   215→| **Cookie flags** | `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/` |
+   216→| **Session store** | Redis key `sess:<id>` with 30-day TTL (rolling) |
+   217→| **Session contents** | `{ cartId, customerId, locale, customerGroup }` |
+   218→| **Guest carts** | Created on first session. Persisted in Medusa. Survive across page loads. |
+   219→| **Auth merge** | When a guest logs in, their guest cart merges with their customer cart. |
+   220→
+   221→### 3.5 API Route Structure
+   222→
+   223→```
+   224→src/app/api/
+   225→├── auth/
+   226→│   ├── login/route.ts          POST   Customer login
+   227→│   ├── register/route.ts       POST   Customer registration
+   228→│   ├── logout/route.ts         POST   Clear session
+   229→│   └── session/route.ts        GET    Return current auth state
+   230→├── cart/
+   231→│   ├── route.ts                GET    Retrieve cart
+   232→│   ├── items/route.ts          POST   Add item to cart
+   233→│   └── items/[id]/route.ts     PATCH  Update quantity
+   234→│                                DELETE Remove item
+   235→├── products/
+   236→│   ├── route.ts                GET    List products (search, filter, paginate)
+   237→│   └── [handle]/route.ts       GET    Single product detail
+   238→├── categories/
+   239→│   ├── route.ts                GET    List categories
+   240→│   └── [slug]/route.ts         GET    Category with products
+   241→├── orders/
+   242→│   ├── route.ts                GET    List customer orders
+   243→│   └── [id]/route.ts           GET    Order detail
+   244→├── checkout/
+   245→│   ├── route.ts                POST   Initiate checkout
+   246→│   └── complete/route.ts       POST   Complete checkout (confirm payment)
+   247→└── webhooks/
+   248→    ├── medusa/route.ts         POST   Medusa event webhooks
+   249→    └── erpnext/route.ts        POST   ERPNext push webhooks
+   250→```
+   251→
+   252→Every API route follows this pattern:
+   253→
+   254→```typescript
+   255→// 1. Validate input (Zod schema)
+   256→// 2. Authenticate request (session or service token)
+   257→// 3. Authorize action (customer group check)
+   258→// 4. Call Medusa / ERPNext / Redis
+   259→// 5. Transform response for frontend
+   260→// 6. Return JSON with proper status code
+   261→// 7. Log request duration and result
+   262→```
+   263→
+   264→---
+   265→
+   266→## 4. Medusa v2 — Commerce Engine
+   267→
+   268→### 4.1 Role
+   269→
+   270→Medusa owns all commerce data and business logic. It is the system of record for products, prices, carts, orders, customers, payments, and shipping — but **not** for accounting or inventory truth (ERPNext owns those).
+   271→
+   272→### 4.2 Module Responsibilities
+   273→
+   274→| Module | Owns | Key Operations | ERP Sync |
+   275→|---|---|---|---|
+   276→| **Product** | Products, variants, categories, collections, tags | CRUD, search, filtering | Read from ERP (items → products) |
+   277→| **Pricing** | Price sets, price lists, bulk-break tiers | Calculate price for quantity + customer group | Read from ERP (item prices) |
+   278→| **Cart** | Carts, line items, shipping methods | Add/remove items, calculate totals, apply discounts | None |
+   279→| **Order** | Orders, fulfillments, returns, refunds | Status transitions, cancellation, return processing | Write to ERP (sales orders) |
+   280→| **Customer** | Customers, addresses, customer groups | Registration, auth, profile management | Write to ERP (customers) |
+   281→| **Payment** | Payment sessions, payments, refunds | Initialize, authorize, capture, refund | Read from ERP (payment entries) |
+   282→| **Shipping** | Shipping options, delivery zones, rates | Calculate shipping cost, assign fulfillment | None (GGH-managed logistics) |
+   283→| **Inventory** | Inventory items, stock levels, reservations | Check availability, reserve stock on order | Read from ERP (stock ledger) |
+   284→| **Notification** | Email templates, SMS templates | Send order confirmations, shipping updates | None |
+   285→
+   286→### 4.3 Custom Modules (GGH-Specific)
+   287→
+   288→These modules extend Medusa beyond its default retail-oriented behavior to support wholesale operations.
+   289→
+   290→| Module | Purpose | Key Logic |
+   291→|---|---|---|
+   292→| **Wholesale Pricing** | Bulk-break pricing tiers beyond Medusa's default price lists | `calculatePrice(variant, quantity, customerGroup)` → returns `{ unitPrice, totalPrice, tierName, savingsPercent }` |
+   293→| **Delivery Zones** | Geographic zones for shipping rate calculation (Cairo, Giza, 6th October, national) | `getZone(address)` → `{ zoneId, zoneName, availableSlots, shippingRate }` |
+   294→| **Order Templates** | Saved cart templates for recurring B2B orders | `createTemplate(cartId, name)` → template stored with line items for one-tap reorder |
+   295→| **Subscription** | Scheduled auto-reorder (Phase 2) | `scheduleReorder(templateId, frequency)` → BullMQ recurring job |
+   296→
+   297→### 4.4 Medusa Events (Consumed by Subscribers)
+   298→
+   299→| Event | Emitted When | Subscriber Action |
+   300→|---|---|---|
+   301→| `order.placed` | Customer completes checkout | Enqueue `erp.push.order` + `order.confirmation` jobs |
+   302→| `order.canceled` | Order is canceled | Enqueue `erp.sync.order.cancel` job |
+   303→| `payment.captured` | Payment is confirmed | Enqueue `order.payment.confirmed` notification |
+   304→| `payment.refunded` | Refund is processed | Enqueue `order.refund` notification |
+   305→| `customer.created` | New customer registers | Enqueue `erp.sync.customers` job |
+   306→| `customer.updated` | Customer profile changes | Enqueue `erp.sync.customers` job |
+   307→| `product.updated` | Product data changes in Medusa | Enqueue `cache.invalidate` job |
+   308→
+   309→### 4.5 Wholesale Pricing Logic
+   310→
+   311→```
+   312→Input: variantId, quantity, customerGroupId
+   313→
+   314→Step 1: Fetch price tiers for variant
+   315→        Tier 1: qty 1–4   → EGP 25.00/unit  (retail)
+   316→        Tier 2: qty 5–9   → EGP 22.50/unit  (wholesale)
+   317→        Tier 3: qty 10+   → EGP 20.00/unit  (bulk)
+   318→
+   319→Step 2: Apply customer group multiplier
+   320→        Group "retail"           → only Tier 1 available
+   321→        Group "wholesale-verified" → Tier 1, 2, 3 available
+   322→        Group "wholesale-enterprise" → Tier 1, 2, 3 + custom discount
+   323→
+   324→Step 3: Return
+   325→        {
+   326→          unitPrice: 2250,          // in piastres (integer)
+   327→          currency: "EGP",
+   328→          tierName: "Wholesale",
+   329→          quantity: 5,
+   330→          lineTotal: 11250,
+   331→          savingsVsRetail: 1250,    // saved vs Tier 1
+   332→          savingsPercent: 10
+   333→        }
+   334→```
+   335→
+   336→---
+   337→
+   338→## 5. PostgreSQL — Primary Database
+   339→
+   340→### 5.1 Role
+   341→
+   342→PostgreSQL is the persistent data store for all Medusa and GGH operational data. It is the only durable storage for commerce records.
+   343→
+   344→### 5.2 Schema Organization
+   345→
+   346→| Schema | Owner | Contents |
+   347→|---|---|---|
+   348→| `public` | Medusa (managed) | All Medusa core tables: product, product_variant, order, order_line_item, customer, payment, etc. Medusa manages migrations — do not modify directly. |
+   349→| `ggh` | GGH team | Custom tables: `erp_sync_log`, `delivery_zone`, `delivery_slot`, `order_template`, `subscription_schedule`, `price_tier_config` |
+   350→
+   351→### 5.3 Custom Tables (ggh schema)
+   352→
+   353→```sql
+   354→-- Audit log for all ERP sync operations
+   355→CREATE TABLE ggh.erp_sync_log (
+   356→    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   357→    entity_type   TEXT NOT NULL,          -- 'product'|'inventory'|'customer'|'order'|'invoice'
+   358→    entity_id     TEXT NOT NULL,          -- Medusa or ERP entity identifier
+   359→    direction     TEXT NOT NULL,          -- 'erp_to_medusa' | 'medusa_to_erp'
+   360→    status        TEXT NOT NULL,          -- 'success' | 'conflict' | 'error'
+   361→    medusa_data   JSONB,                 -- Snapshot of Medusa state
+   362→    erp_data      JSONB,                 -- Snapshot of ERP state
+   363→    error_message TEXT,
+   364→    duration_ms   INTEGER,
+   365→    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+   366→);
+   367→
+   368→-- Delivery zones for shipping calculation
+   369→CREATE TABLE ggh.delivery_zone (
+   370→    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   371→    name_en       TEXT NOT NULL,
+   372→    name_ar       TEXT NOT NULL,
+   373→    regions       JSONB NOT NULL,        -- Array of areas/postal codes
+   374→    base_rate     INTEGER NOT NULL,      -- Base shipping rate in piastres
+   375→    free_above    INTEGER,               -- Free delivery above this order value
+   376→    is_active     BOOLEAN DEFAULT TRUE,
+   377→    created_at    TIMESTAMPTZ DEFAULT NOW(),
+   378→    updated_at    TIMESTAMPTZ DEFAULT NOW()
+   379→);
+   380→
+   381→-- Available delivery time slots
+   382→CREATE TABLE ggh.delivery_slot (
+   383→    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   384→    zone_id       UUID REFERENCES ggh.delivery_zone(id),
+   385→    day_of_week   SMALLINT NOT NULL,     -- 0=Sunday (Egypt work week)
+   386→    start_time    TIME NOT NULL,
+   387→    end_time      TIME NOT NULL,
+   388→    max_orders    INTEGER NOT NULL DEFAULT 20,
+   389→    current_orders INTEGER NOT NULL DEFAULT 0,
+   390→    is_active     BOOLEAN DEFAULT TRUE
+   391→);
+   392→
+   393→-- Saved order templates for B2B quick reorder
+   394→CREATE TABLE ggh.order_template (
+   395→    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   396→    customer_id   TEXT NOT NULL,         -- Medusa customer ID
+   397→    name          TEXT NOT NULL,
+   398→    items         JSONB NOT NULL,        -- [{ variantId, quantity }]
+   399→    last_used_at  TIMESTAMPTZ,
+   400→    created_at    TIMESTAMPTZ DEFAULT NOW()
+   401→);
+   402→
+   403→-- Bulk-break pricing tier configuration
+   404→CREATE TABLE ggh.price_tier_config (
+   405→    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+   406→    variant_id    TEXT NOT NULL,         -- Medusa variant ID
+   407→    tier_name     TEXT NOT NULL,
+   408→    min_quantity  INTEGER NOT NULL,
+   409→    max_quantity  INTEGER,               -- NULL = no upper limit
+   410→    price_amount  INTEGER NOT NULL,      -- In piastres
+   411→    currency_code TEXT NOT NULL DEFAULT 'EGP',
+   412→    customer_groups JSONB,               -- Groups allowed this tier. NULL = all groups.
+   413→    created_at    TIMESTAMPTZ DEFAULT NOW()
+   414→);
+   415→```
+   416→
+   417→### 5.4 Index Strategy
+   418→
+   419→| Table | Index | Purpose |
+   420→|---|---|---|
+   421→| `ggh.erp_sync_log` | `(entity_type, entity_id)` | Fast lookup of sync history per entity |
+   422→| `ggh.erp_sync_log` | `(status, created_at DESC)` | Find recent failures quickly |
+   423→| `ggh.delivery_slot` | `(zone_id, day_of_week)` | Look up available slots for a zone |
+   424→| `ggh.order_template` | `(customer_id)` | Load a customer's templates |
+   425→| `ggh.price_tier_config` | `(variant_id, min_quantity)` | Resolve price tier for a given quantity |
+   426→
+   427→### 5.5 Migration Strategy
+   428→
+   429→| Scope | Tool | Rule |
+   430→|---|---|---|
+   431→| Medusa core tables | Medusa CLI (`medusa db:migrate`) | Never modify manually. Upgrades come from Medusa releases. |
+   432→| `ggh` schema | Custom migration scripts in `infra/migrations/ggh/` | Versioned, reversible, tested in CI before production. |
+   433→
+   434→---
+   435→
+   436→## 6. Redis — Cache, Queue & Session Store
+   437→
+   438→### 6.1 Role
+   439→
+   440→Redis serves three distinct functions, separated by key prefix namespaces:
+   441→
+   442→| Function | Key Prefix | Memory Budget | Persistence |
+   443→|---|---|---|---|
+   444→| **Application Cache** | `cache:*` | ~256 MB | No persistence (volatile cache) |
+   445→| **Session Store** | `sess:*` | ~64 MB | AOF persistence (sessions must survive restart) |
+   446→| **BullMQ Queues** | `bull:*` | ~128 MB | AOF persistence (jobs must survive restart) |
+   447→
+   448→### 6.2 Cache Key Registry
+   449→
+   450→| Key Pattern | TTL | Invalidation | Example Value |
+   451→|---|---|---|---|
+   452→| `cache:products:category:<slug>` | 300s | `cache.invalidate` job after ERP sync | JSON array of product summaries |
+   453→| `cache:products:detail:<handle>` | 300s | `cache.invalidate` job after product update | JSON product object |
+   454→| `cache:products:search:<hash>` | 120s | `cache.invalidate` job | JSON array of search results |
+   455→| `cache:deals:active` | 60s | `cache.invalidate` job after deal change | JSON array of active deals |
+   456→| `cache:categories:tree` | 600s | `cache.invalidate` job after category sync | JSON category tree |
+   457→| `cache:inventory:<variantId>` | 300s | `cache.invalidate` job after inventory sync | `{ available: 150, reserved: 12 }` |
+   458→| `cache:erp:sync_cursor:products` | No TTL | Updated after each sync | ISO timestamp of last successful sync |
+   459→| `cache:erp:sync_cursor:inventory` | No TTL | Updated after each sync | ISO timestamp of last successful sync |
+   460→
+   461→### 6.3 Session Data
+   462→
+   463→```json
+   464→{
+   465→  "cartId": "cart_01JXY...",
+   466→  "customerId": null,
+   467→  "locale": "ar",
+   468→  "customerGroup": "retail",
+   469→  "createdAt": "2026-07-19T10:00:00Z",
+   470→  "lastActivity": "2026-07-19T14:30:00Z"
+   471→}
+   472→```
+   473→
+   474→### 6.4 Redis Configuration
+   475→
+   476→```conf
+   477→# Production overrides
+   478→maxmemory 512mb
+   479→maxmemory-policy allkeys-lru
+   480→
+   481→# AOF for session and queue persistence
+   482→appendonly yes
+   483→appendfsync everysec
+   484→
+   485→# Separate logical databases (optional, for isolation)
+   486→# db0: cache (volatile)
+   487→# db1: sessions (persistent)
+   488→# db2: BullMQ queues (persistent)
+   489→```
+   490→
+   491→---
+   492→
+   493→## 7. BullMQ — Job Processing
+   494→
+   495→### 7.1 Role
+   496→
+   497→BullMQ is the asynchronous nervous system of GGH. It decouples services, absorbs traffic spikes, and provides reliable retry semantics for operations that must eventually succeed — especially ERP synchronization.
+   498→
+   499→### 7.2 Queue Registry
+   500→
+   501→| Queue Name | Purpose | Concurrency | Retry | Backoff |
+   502→|---|---|---|---|---|
+   503→| `erp.sync.inventory` | Pull stock levels from ERPNext → update Medusa | 5 | 3 | Exponential (30s, 120s, 300s) |
+   504→| `erp.sync.products` | Pull product data + prices from ERPNext → update Medusa | 2 | 5 | Exponential (30s, 120s, 300s, 600s, 1200s) |
+   505→| `erp.sync.customers` | Push customer data from Medusa → ERPNext | 3 | 3 | Linear (60s) |
+   506→| `erp.push.order` | Push confirmed order from Medusa → ERPNext as Sales Order | 5 | 5 | Exponential (10s, 30s, 120s, 300s, 600s) |
+   507→| `erp.sync.invoice` | Pull invoice/payment data from ERPNext → update Medusa | 3 | 3 | Exponential (60s, 300s, 900s) |
+   508→| `order.confirmation` | Send order confirmation email + SMS | 10 | 3 | Linear (30s) |
+   509→| `order.shipping` | Send shipping notification with delivery ETA | 10 | 3 | Linear (30s) |
+   510→| `notification.sms` | Send SMS (verification, delivery updates) | 20 | 2 | Linear (10s) |
+   511→| `notification.email` | Send transactional email | 10 | 3 | Linear (30s) |
+   512→| `cache.invalidate` | Purge Redis cache keys + trigger Next.js ISR revalidation | 5 | 2 | Linear (5s) |
+   513→| `report.generate` | Generate sales reports, inventory valuation | 1 | 0 | No retry (regenerated on next run) |
+   514→
+   515→### 7.3 Job Lifecycle
+   516→
+   517→```
+   518→Enqueued ──► Active ──► Completed
+   519→                │
+   520→                ├──► Failed ──► Waiting (retry with backoff)
+   521→                │                  │
+   522→                │                  └──► Failed (max retries) ──► Dead Letter Queue
+   523→                │
+   524→                └──► Stalled (worker crashed mid-job) ──► Re-queued automatically
+   525→```
+   526→
+   527→### 7.4 Dead Letter Queue Handling
+   528→
+   529→| Step | Action |
+   530→|---|---|
+   531→| 1. Job exceeds max retries | Moved to DLQ automatically by BullMQ |
+   532→| 2. Alert fires | PagerDuty notification for critical queues (`erp.push.order`, `order.confirmation`) |
+   533→| 3. Engineer reviews | Check `erp_sync_log` for error details |
+   534→| 4. Fix and replay | Engineer fixes root cause, then re-queues the job programmatically |
+   535→| 5. Verify | Confirm job completes; check downstream system for consistency |
+   536→
+   537→### 7.5 Scheduled Jobs (Cron)
+   538→
+   539→| Queue | Schedule | Job Data |
+   540→|---|---|---|
+   541→| `erp.sync.inventory` | Every 5 minutes | `{ fullSync: false }` |
+   542→| `erp.sync.products` | Every 10 minutes | `{ fullSync: false }` |
+   543→| `erp.sync.invoice` | Every 15 minutes | `{}` |
+   544→| `report.generate` | Daily at 02:00 UTC | `{ type: "daily_sales" }` |
+   545→| `report.generate` | Weekly Monday 03:00 UTC | `{ type: "weekly_inventory_valuation" }` |
+   546→| `cache.invalidate` | Daily at 04:00 UTC | `{ keys: ["cache:*"], reason: "nightly_full_purge" }` |
+   547→
+   548→### 7.6 Worker Process Architecture
+   549→
+   550→```
+   551→┌──────────────────────────────────────────────────┐
+   552→│              BullMQ Worker Process                │
+   553→│                                                  │
+   554→│  ┌────────────────────────────────────────────┐  │
+   555→│  │          Redis Connection Pool              │  │
+   556→│  │          (shared across queues)             │  │
+   557→│  └────────────────────────────────────────────┘  │
+   558→│                                                  │
+   559→│  ┌──────────────┐  ┌──────────────┐             │
+   560→│  │ ERP Sync     │  │ Order Jobs   │             │
+   561→│  │ Processors   │  │ Processors   │             │
+   562→│  │ (5 queues)   │  │ (2 queues)   │             │
+   563→│  └──────────────┘  └──────────────┘             │
+   564→│                                                  │
+   565→│  ┌──────────────┐  ┌──────────────┐             │
+   566→│  │ Notification │  │ Maintenance  │             │
+   567→│  │ Processors   │  │ Processors   │             │
+   568→│  │ (3 queues)   │  │ (1 queue)    │             │
+   569→│  └──────────────┘  └──────────────┘             │
+   570→│                                                  │
+   571→│  ┌────────────────────────────────────────────┐  │
+   572→│  │  Shared Clients                             │  │
+   573→│  │  ├── Medusa Admin API Client                │  │
+   574→│  │  ├── ERPNext REST Client                    │  │
+   575→│  │  ├── PostgreSQL Connection (audit log)      │  │
+   576→│  │  └── Next.js Revalidation Webhook Client    │  │
+   577→│  └────────────────────────────────────────────┘  │
+   578→└──────────────────────────────────────────────────┘
+   579→```
+   580→
+   581→---
+   582→
+   583→## 8. ERPNext — ERP System
+   584→
+   585→### 8.1 Role
+   586→
+   587→ERPNext is the **financial and inventory source of truth**. Medusa holds operational data for the storefront; ERPNext holds the books. When they disagree, ERPNext wins.
+   588→
+   589→### 8.2 ERPNext Modules Used
+   590→
+   591→| Module | What GGH Uses It For |
+   592→|---|---|
+   593→| **Item Master** | Canonical product definitions: SKU, name (EN/AR), cost price, supplier, unit of measure, item group |
+   594→| **Stock Ledger** | Real-time inventory quantities per warehouse (Cairo Central, Giza Hub, 6th October Depot) |
+   595→| **Sales Order** | Mirror of every GGH order. Triggers delivery note and invoice creation. |
+   596→| **Sales Invoice** | Financial record with VAT calculation. Payment entries reconcile here. |
+   597→| **Delivery Note** | Proof of shipment. Used for driver tracking and weight verification. |
+   598→| **Purchase Order** | Restocking from suppliers. Triggered when inventory falls below reorder level. |
+   599→| **Customer** | B2B customer records with credit terms, payment history, and contact details |
+   600→| **Accounts & Finance** | Chart of accounts, general ledger, profit & loss, balance sheet |
+   601→| **Supplier** | Supplier master data, lead times, pricing agreements |
+   602→
+   603→### 8.3 ERPNext API Endpoints Consumed
+   604→
+   605→| Endpoint | Method | Used By | Purpose |
+   606→|---|---|---|---|
+   607→| `/api/resource/Item` | GET | `erp.sync.products` | Fetch product catalog |
+   608→| `/api/resource/Item Price` | GET | `erp.sync.products` | Fetch pricing tiers |
+   609→| `/api/resource/Item Group` | GET | `erp.sync.products` | Fetch category tree |
+   610→| `/api/resource/Stock Ledger Entry` | GET | `erp.sync.inventory` | Fetch inventory levels |
+   611→| `/api/resource/Customer` | POST/PUT | `erp.sync.customers` | Create/update customer records |
+   612→| `/api/resource/Sales Order` | POST | `erp.push.order` | Create sales order from GGH order |
+   613→| `/api/resource/Delivery Note` | GET | `erp.sync.invoice` | Check shipment status |
+   614→| `/api/resource/Sales Invoice` | GET | `erp.sync.invoice` | Fetch invoice data |
+   615→| `/api/resource/Payment Entry` | GET | `erp.sync.invoice` | Fetch payment status |
+   616→| `/api/method/ggh_erp.webhook.order_status` | POST | ERPNext internal | Push order status updates to GGH |
+   617→
+   618→### 8.4 Custom Frappe App: `ggh_erp`
+   619→
+   620→A custom Frappe application installed on the ERPNext instance to provide GGH-specific functionality:
+   621→
+   622→| DocType | Purpose |
+   623→|---|---|
+   624→| `GGH Order Sync Log` | Tracks every sync attempt between GGH and ERPNext, with timestamps and error details |
+   625→| `GGH Delivery Zone` | Maps Egyptian postal codes/areas to delivery zones, synced with Medusa |
+   626→| `GGH Pricing Tier` | Custom pricing rules for bulk-break tiers, synced with Medusa |
+   627→| `GGH Sync Config` | Configuration for sync intervals, retry policies, and field mappings |
+   628→
+   629→### 8.5 ERPNext Authentication
+   630→
+   631→| Method | Credential | Scope |
+   632→|---|---|---|
+   633→| **Token Auth** | `api_key` + `api_secret` in headers | Used by BullMQ workers for all API calls |
+   634→| **Webhook Secret** | Shared secret in `x-erpnext-webhook-token` header | Used for push notifications from ERPNext → GGH |
+   635→| **OAuth (future)** | ERPNext OAuth2 provider | For admin dashboard SSO in Phase 3 |
+   636→
+   637→---
+   638→
+   639→## 9. Docker — Containerization
+   640→
+   641→### 9.1 Container Map
+   642→
+   643→```
+   644→┌─────────────────────────────────────────────────────────────┐
+   645→│                    Docker Environment                        │
+   646→│                                                             │
+   647→│  ┌─────────────┐  ┌─────────────┐  ┌────────────────────┐ │
+   648→│  │  ggh-web    │  │ ggh-medusa  │  │  ggh-worker        │ │
+   649→│  │  Next.js    │  │ Medusa v2   │  │  BullMQ Worker     │ │
+   650→│  │  :3000      │  │ :9000       │  │  (no port exposed) │ │
+   651→│  └──────┬──────┘  └──────┬──────┘  └────────┬───────────┘ │
+   652→│         │                │                   │              │
+   653→│         └────────────────┼───────────────────┘              │
+   654→│                          │                                  │
+   655→│         ┌────────────────┼────────────────┐                 │
+   656→│         ▼                ▼                ▼                 │
+   657→│  ┌─────────────┐  ┌─────────────┐  ┌────────────────────┐ │
+   658→│  │ PostgreSQL  │  │   Redis     │  │   ERPNext          │ │
+   659→│  │   :5432     │  │   :6379     │  │   :8000            │ │
+   660→│  └─────────────┘  └─────────────┘  └────────────────────┘ │
+   661→│                                                             │
+   662→└─────────────────────────────────────────────────────────────┘
+   663→```
+   664→
+   665→### 9.2 Docker Compose Configuration
+   666→
+   667→```yaml
+   668→version: "3.9"
+   669→
+   670→services:
+   671→  # ── Data Layer ──────────────────────────────────────────
+   672→  postgres:
+   673→    image: postgres:16-alpine
+   674→    environment:
+   675→      POSTGRES_DB: medusa
+   676→      POSTGRES_USER: medusa
+   677→      POSTGRES_PASSWORD: ${DB_PASSWORD}
+   678→    volumes:
+   679→      - pg_data:/var/lib/postgresql/data
+   680→    healthcheck:
+   681→      test: ["CMD-SHELL", "pg_isready -U medusa"]
+   682→      interval: 5s
+   683→      timeout: 5s
+   684→      retries: 5
+   685→    restart: unless-stopped
+   686→
+   687→  redis:
+   688→    image: redis:7-alpine
+   689→    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --appendonly yes --appendfsync everysec
+   690→    volumes:
+   691→      - redis_data:/data
+   692→    healthcheck:
+   693→      test: ["CMD", "redis-cli", "ping"]
+   694→      interval: 5s
+   695→      timeout: 5s
+   696→      retries: 5
+   697→    restart: unless-stopped
+   698→
+   699→  # ── Commerce Layer ──────────────────────────────────────
+   700→  medusa:
+   701→    build:
+   702→      context: .
+   703→      dockerfile: docker/medusa/Dockerfile
+   704→    environment:
+   705→      DATABASE_URL: postgres://medusa:${DB_PASSWORD}@postgres:5432/medusa
+   706→      REDIS_URL: redis://redis:6379
+   707→      MEDUSA_ADMIN_ONBOARDING_EMAIL: ${ADMIN_EMAIL}
+   708→      JWT_SECRET: ${JWT_SECRET}
+   709→      COOKIE_SECRET: ${COOKIE_SECRET}
+   710→    depends_on:
+   711→      postgres:
+   712→        condition: service_healthy
+   713→      redis:
+   714→        condition: service_healthy
+   715→    ports:
+   716→      - "9000:9000"
+   717→    healthcheck:
+   718→      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+   719→      interval: 10s
+   720→      timeout: 5s
+   721→      retries: 10
+   722→    restart: unless-stopped
+   723→
+   724→  # ── Worker Layer ────────────────────────────────────────
+   725→  worker:
+   726→    build:
+   727→      context: .
+   728→      dockerfile: docker/worker/Dockerfile
+   729→    environment:
+   730→      MEDUSA_URL: http://medusa:9000
+   731→      MEDUSA_API_KEY: ${MEDUSA_API_KEY}
+   732→      REDIS_URL: redis://redis:6379
+   733→      ERP_URL: http://erpnext:8000
+   734→      ERP_API_KEY: ${ERP_API_KEY}
+   735→      ERP_API_SECRET: ${ERP_API_SECRET}
+   736→      DATABASE_URL: postgres://medusa:${DB_PASSWORD}@postgres:5432/medusa
+   737→      NEXTJS_URL: http://web:3000
+   738→    depends_on:
+   739→      medusa:
+   740→        condition: service_healthy
+   741→      redis:
+   742→        condition: service_healthy
+   743→      erpnext:
+   744→        condition: service_started
+   745→    restart: unless-stopped
+   746→
+   747→  # ── Frontend Layer ──────────────────────────────────────
+   748→  web:
+   749→    build:
+   750→      context: .
+   751→      dockerfile: docker/nextjs/Dockerfile
+   752→    environment:
+   753→      MEDUSA_URL: http://medusa:9000
+   754→      MEDUSA_PUBLISHABLE_KEY: ${MEDUSA_PUBLISHABLE_KEY}
+   755→      MEDUSA_API_KEY: ${MEDUSA_API_KEY}
+   756→      REDIS_URL: redis://redis:6379
+   757→      ERP_URL: http://erpnext:8000
+   758→      SESSION_SECRET: ${SESSION_SECRET}
+   759→      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+   760→    depends_on:
+   761→      medusa:
+   762→        condition: service_healthy
+   763→      redis:
+   764→        condition: service_healthy
+   765→    ports:
+   766→      - "3000:3000"
+   767→    healthcheck:
+   768→      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+   769→      interval: 10s
+   770→      timeout: 5s
+   771→      retries: 5
+   772→    restart: unless-stopped
+   773→
+   774→  # ── ERP Layer ───────────────────────────────────────────
+   775→  erpnext:
+   776→    build:
+   777→      context: .
+   778→      dockerfile: docker/erpnext/Dockerfile
+   779→    volumes:
+   780→      - erpnext_data:/home/frappe/frappe-bench/sites
+   781→    ports:
+   782→      - "8000:8000"
+   783→    restart: unless-stopped
+   784→
+   785→volumes:
+   786→  pg_data:
+   787→  redis_data:
+   788→  erpnext_data:
+   789→```
+   790→
+   791→### 9.3 Development vs. Production
+   792→
+   793→| Aspect | Development | Production |
+   794→|---|---|---|
+   795→| **Docker Compose file** | `docker-compose.dev.yml` | `docker-compose.yml` |
+   796→| **Hot reload** | Next.js: mounted volumes + turbopack; Medusa: mounted volumes; Worker: `bun --hot` | No hot reload; pre-built images |
+   797→| **ERPNext** | Optional (mock API with MSW) | Required |
+   798→| **Database** | Same PostgreSQL container, seeded with fixtures | Managed PostgreSQL with backups |
+   799→| **Redis** | Same container, no persistence | AOF persistence enabled |
+   800→| **Logging** | Pretty-print to stdout | Structured JSON to stdout → log aggregator |
+   801→
+   802→---
+   803→
+   804→## 10. Inter-Service Communication
+   805→
+   806→### 10.1 Communication Matrix
+   807→
+   808→| From | To | Protocol | Pattern | When |
+   809→|---|---|---|---|---|
+   810→| Next.js | Medusa | HTTP REST | Synchronous request-response | Every storefront API call |
+   811→| Next.js | Redis | Redis protocol | Synchronous read/write | Session lookup, cache read |
+   812→| Medusa | Redis | Redis protocol | Pub/Sub + read/write | Event bus, internal cache |
+   813→| Medusa | BullMQ | Redis-backed queue | Async fire-and-forget | Emit event → enqueue job |
+   814→| BullMQ Worker | Medusa | HTTP REST (Admin API) | Synchronous request-response | Sync data, update records |
+   815→| BullMQ Worker | ERPNext | HTTP REST | Synchronous request-response | Fetch/push ERP data |
+   816→| BullMQ Worker | PostgreSQL | SQL | Synchronous write | Audit log entries |
+   817→| BullMQ Worker | Next.js | HTTP POST (webhook) | Async fire-and-forget | Trigger ISR revalidation |
+   818→| ERPNext | Next.js | HTTP POST (webhook) | Async push notification | Item updated, order status changed |
+   819→
+   820→### 10.2 Communication Patterns Explained
+   821→
+   822→#### Synchronous Request-Response (HTTP REST)
+   823→
+   824→Used when the caller needs an immediate answer to proceed.
+   825→
+   826→```
+   827→Next.js ──GET /store/products──► Medusa
+   828→         ◄──200 { products }────
+   829→```
+   830→
+   831→**Rules:**
+   832→- All calls have a timeout (5 seconds for storefront, 30 seconds for worker → ERP)
+   833→- All calls are retried once on network error (except user-facing mutations)
+   834→- All responses are validated against expected shape before returning to the client
+   835→
+   836→#### Asynchronous Fire-and-Forget (BullMQ)
+   837→
+   838→Used when the operation can be deferred and the caller does not need to wait.
+   839→
+   840→```
+   841→Medusa ──emit "order.placed"──► Redis Pub/Sub ──► Subscriber ──► BullMQ.enqueue("erp.push.order", { orderId })
+   842→```
+   843→
+   844→**Rules:**
+   845→- Every job carries a `jobId` for tracing
+   846→- Every job logs start time, end time, and outcome to `erp_sync_log`
+   847→- Critical jobs (`erp.push.order`) have 5 retries with exponential backoff
+   848→- Non-critical jobs (`cache.invalidate`) have 2 retries with linear backoff
+   849→
+   850→#### Push Notification (Webhook)
+   851→
+   852→Used when ERPNext needs to notify GGH of a change without being asked.
+   853→
+   854→```
+   855→ERPNext ──POST /api/webhooks/erpnext──► Next.js ──verify HMAC──► BullMQ.enqueue("erp.sync.*")
+   856→```
+   857→
+   858→**Rules:**
+   859→- All webhooks are verified via shared secret (`x-erpnext-webhook-token`)
+   860→- Webhook handlers return 200 immediately, then enqueue a job
+   861→- No business logic in webhook handlers — they are thin intake pipes
+   862→
+   863→---
+   864→
+   865→## 11. Data Flow
+   866→
+   867→### 11.1 Product Browsing (Read Path — User Facing)
+   868→
+   869→This is the most frequent flow. It must be fast, cached, and render server-side.
+   870→
+   871→```
+   872→User's Browser
+   873→    │
+   874→    │  GET /categories/rice-grains
+   875→    │
+   876→    ▼
+   877→Next.js Server (RSC or Route Handler)
+   878→    │
+   879→    ├─── Check Next.js Data Cache (tag: "products:rice-grains")
+   880→    │         │
+   881→    │         ├── HIT ──► Return cached HTML/JSON (0ms latency)
+   882→    │         │
+   883→    │         └── MISS ──► Continue
+   884→    │
+   885→    ├─── Check Redis Cache (key: "cache:products:category:rice-grains")
+   886→    │         │
+   887→    │         ├── HIT ──► Return cached data → render → store in Data Cache
+   888→    │         │
+   889→    │         └── MISS ──► Continue
+   890→    │
+   891→    └─── Call Medusa Store API
+   892→              │
+   893→              │  GET /store/products?category_id=cat_rice&limit=20
+   894→              │
+   895→              ▼
+   896→         Medusa
+   897→              │
+   898→              ├── Query PostgreSQL (product + variant + price tables)
+   899→              ├── Calculate wholesale price for current customer group
+   900→              ├── Check inventory levels
+   901→              └── Return product list
+   902→              │
+   903→              ▼
+   904→         Next.js
+   905→              ├── Store in Redis cache (TTL: 300s)
+   906→              ├── Store in Next.js Data Cache (revalidate: 60s)
+   907→              ├── Render HTML (SSR)
+   908→              └── Return to browser
+   909→              │
+   910→              ▼
+   911→         Browser
+   912→              ├── Display page instantly (SSR)
+   913→              ├── Hydrate interactive elements (quantity stepper, add-to-cart)
+   914→              └── TanStack Query takes over for subsequent navigations (SWR)
+   915→```
+   916→
+   917→**Total latency target:**
+   918→- Cache hit: < 50ms
+   919→- Cache miss: < 300ms
+   920→- Cold start (no cache anywhere): < 500ms
+   921→
+   922→### 11.2 Product Sync (Write Path — ERP → Medusa)
+   923→
+   924→This flow keeps Medusa's product data aligned with ERPNext's Item Master.
+   925→
+   926→```
+   927→Trigger (one of):
+   928→  a) ERPNext webhook: Item updated
+   929→  b) Cron: every 10 minutes
+   930→  c) Manual: admin dashboard "Sync Now" button
+   931→    │
+   932→    ▼
+   933→BullMQ: erp.sync.products
+   934→    │
+   935→    ▼
+   936→Worker Processor: sync-products
+   937→    │
+   938→    ├── 1. Fetch modified items from ERPNext
+   939→    │      GET /api/resource/Item?filters=[["modified", ">", "{last_cursor}"]]
+   940→    │      GET /api/resource/Item Price?filters=[["item_code", "in", [...item_codes]]]
+   941→    │
+   942→    ├── 2. Transform each ERP Item → Medusa Product DTO
+   943→    │      {
+   944→    │        erp_item_code: "RICE-BASMATI-5KG",
+   945→    │        title_en: "Basmati Rice 5kg",
+   946→    │        title_ar: "أرز بسمتي ٥ كيلو",
+   947→    │        sku: "RICE-BASMATI-5KG",
+   948→    │        category: "Rice & Grains",      // mapped from Item Group
+   949→    │        variants: [
+   950→    │          { sku: "RICE-BASMATI-5KG", weight: 5, unit: "kg",
+   951→    │            prices: { retail: 125, wholesale: 110, bulk: 100 } }
+   952→    │        ]
+   953→    │      }
+   954→    │
+   955→    ├── 3. Upsert into Medusa via Admin API
+   956→    │      POST /admin/products (if new)
+   957→    │      POST /admin/products/:id (if existing)
+   958→    │      POST /admin/price-lists/:id/prices (update wholesale tiers)
+   959→    │
+   960→    ├── 4. Update sync cursor in Redis
+   961→    │      SET cache:erp:sync_cursor:products "<latest_modified_timestamp>"
+   962→    │
+   963→    ├── 5. Log result to PostgreSQL
+   964→    │      INSERT INTO ggh.erp_sync_log (entity_type, entity_id, direction, status, ...)
+   965→    │
+   966→    └── 6. Enqueue cache invalidation
+   967→           BullMQ: cache.invalidate { keys: ["cache:products:*", "cache:categories:*"] }
+   968→```
+   969→
+   970→### 11.3 Inventory Sync (Write Path — ERP → Medusa)
+   971→
+   972→```
+   973→Trigger: Cron every 5 minutes
+   974→    │
+   975→    ▼
+   976→BullMQ: erp.sync.inventory
+   977→    │
+   978→    ▼
+   979→Worker Processor: sync-inventory
+   980→    │
+   981→    ├── 1. Fetch stock levels from ERPNext
+   982→    │      GET /api/resource/Stock Ledger Entry
+   983→    │        ?filters=[["warehouse","in",["Cairo Central","Giza Hub"]],
+   984→    │                   ["item_code","in",<active_items>]]
+   985→    │
+   986→    ├── 2. For each item, calculate available quantity
+   987→    │      available = actual_qty - reserved_qty - ordered_qty
+   988→    │
+   989→    ├── 3. Update Medusa inventory
+   990→    │      POST /admin/inventory-items/:id/stock-location/:locationId
+   991→    │        { stocked_quantity: <available> }
+   992→    │
+   993→    ├── 4. Update Redis cache
+   994→    │      SET cache:inventory:<variantId> '{"available":150,"reserved":12}'
+   995→    │
+   996→    ├── 5. If quantity changed from >0 to 0, mark variant as "out_of_stock"
+   997→    │      If quantity changed from 0 to >0, mark variant as "in_stock"
+   998→    │
+   999→    └── 6. Enqueue cache invalidation
+  1000→           BullMQ: cache.invalidate { keys: ["cache:inventory:*", "cache:products:*"] }
+  1001→```
+  1002→
+  1003→### 11.4 Order Placement (Write Path — User → Medusa → ERP)
+  1004→
+  1005→This is the most critical write flow. It must be reliable, idempotent, and auditable.
+  1006→
+  1007→```
+  1008→User clicks "Complete Order"
+  1009→    │
+  1010→    ▼
+  1011→Browser ──POST /api/checkout/complete──► Next.js API Route
+  1012→    │
+  1013→    ├── 1. Validate input (Zod schema)
+  1014→    │      { cartId, shippingMethodId, paymentMethodId, deliverySlotId }
+  1015→    │
+  1016→    ├── 2. Check minimum order value
+  1017→    │      B2C: ≥ EGP 500 | B2B: ≥ EGP 2,000
+  1018→    │
+  1019→    ├── 3. Verify delivery slot availability
+  1020→    │      SELECT current_orders FROM ggh.delivery_slot WHERE id = :slotId
+  1021→    │      IF current_orders >= max_orders → return 409 Conflict
+  1022→    │
+  1023→    ├── 4. Call Medusa: complete cart
+  1024→    │      POST /store/carts/:cartId/complete-cart
+  1025→    │      (Medusa handles: inventory reservation, payment capture, order creation)
+  1026→    │
+  1027→    ├── 5. Increment delivery slot order count
+  1028→    │      UPDATE ggh.delivery_slot SET current_orders = current_orders + 1
+  1029→    │
+  1030→    ├── 6. Return order confirmation to browser
+  1031→    │      { orderId, orderNumber, estimatedDelivery, summary }
+  1032→    │
+  1033→    └── 7. Medusa emits "order.placed" event
+  1034→              │
+  1035→              ▼
+  1036→         Medusa Subscriber
+  1037→              │
+  1038→              ├── Enqueue BullMQ: erp.push.order { orderId }
+  1039→              └── Enqueue BullMQ: order.confirmation { orderId }
+  1040→```
+  1041→
+  1042→### 11.5 Order → ERP Push (Critical Async Flow)
+  1043→
+  1044→```
+  1045→BullMQ: erp.push.order
+  1046→    │
+  1047→    ▼
+  1048→Worker Processor: push-order
+  1049→    │
+  1050→    ├── 1. Fetch order from Medusa Admin API
+  1051→    │      GET /admin/orders/:orderId
+  1052→    │
+  1053→    ├── 2. Transform → ERPNext Sales Order DTO
+  1054→    │      {
+  1055→    │        customer: "CUST-001",
+  1056→    │        items: [
+  1057→    │          { item_code: "RICE-BASMATI-5KG", qty: 5, rate: 110.00 },
+  1058→    │          { item_code: "OIL-SUNFLOWER-1L", qty: 3, rate: 65.00 }
+  1059→    │        ],
+  1060→    │        delivery_date: "2026-07-22",
+  1061→    │        ggh_order_id: "order_01JXY..."
+  1062→    │      }
+  1063→    │
+  1064→    ├── 3. Create Sales Order in ERPNext
+  1065→    │      POST /api/resource/Sales Order
+  1066→    │
+  1067→    ├── 4. On success:
+  1068→    │      a. Store ERP Sales Order ID on Medusa order metadata
+  1069→    │      b. Log success to ggh.erp_sync_log
+  1070→    │      c. Enqueue cache.invalidate for order-related caches
+  1071→    │
+  1072→    └── 5. On failure:
+  1073→           a. Log error to ggh.erp_sync_log
+  1074→           b. BullMQ retries with exponential backoff
+  1075→           c. After 5 failures: move to dead letter queue → alert
+  1076→```
+  1077→
+  1078→### 11.6 Cache Invalidation Flow
+  1079→
+  1080→```
+  1081→BullMQ: cache.invalidate { keys: ["cache:products:*", "cache:categories:*"] }
+  1082→    │
+  1083→    ▼
+  1084→Worker Processor: cache-invalidate
+  1085→    │
+  1086→    ├── 1. Delete matching Redis keys
+  1087→    │      SCAN for keys matching pattern → DEL each key
+  1088→    │
+  1089→    ├── 2. Trigger Next.js ISR revalidation
+  1090→    │      POST http://web:3000/api/webhooks/revalidate
+  1091→    │        { tags: ["products", "categories"], secret: WEBHOOK_SECRET }
+  1092→    │
+  1093→    └── 3. Next.js revalidation handler
+  1094→              │
+  1095→              ├── revalidateTag("products")
+  1096→              ├── revalidateTag("categories")
+  1097→              └── Return 200
+  1098→```
+  1099→
+  1100→### 11.7 Customer Registration Flow
+  1101→
+  1102→```
+  1103→Browser ──POST /api/auth/register──► Next.js API Route
+  1104→    │
+  1105→    ├── 1. Validate input
+  1106→    │      { name, email, phone, password, type: "retail"|"wholesale" }
+  1107→    │
+  1108→    ├── 2. Create customer in Medusa
+  1109→    │      POST /store/customers
+  1110→    │
+  1111→    ├── 3. If type === "wholesale":
+  1112→    │      Set customer_group to "wholesale-pending"
+  1113→    │      (Admin must verify business documents before upgrading to "wholesale-verified")
+  1114→    │
+  1115→    ├── 4. Create session
+  1116→    │      SET sess:<id> { customerId, locale, customerGroup }
+  1117→    │
+  1118→    ├── 5. Medusa emits "customer.created"
+  1119→    │      → BullMQ: erp.sync.customers
+  1120→    │
+  1121→    └── 6. Return { customer, session }
+  1122→              │
+  1123→              ▼
+  1124→         Worker: sync-customers
+  1125→              │
+  1126→              ├── Fetch customer from Medusa
+  1127→              ├── Transform → ERPNext Customer DTO
+  1128→              └── POST /api/resource/Customer in ERPNext
+  1129→```
+  1130→
+  1131→---
+  1132→
+  1133→## 12. Failure Modes & Degradation
+  1134→
+  1135→### 12.1 Failure Impact Matrix
+  1136→
+  1137→| What Fails | User Impact | Automatic Recovery | Manual Action |
+  1138→|---|---|---|---|
+  1139→| **PostgreSQL** | Complete outage. No product browsing, no checkout. | Container restart with health check. If data corrupted, restore from backup. | Monitor pg_isready. Restore from daily backup if corruption detected. |
+  1140→| **Redis** | No sessions (users logged out). No cache (slower page loads). No job processing (ERP sync stops). | Container restart. AOF replay on startup. | Monitor memory usage. Scale if OOM persists. |
+  1141→| **Medusa** | No product data, no cart, no checkout. Homepage shows cached content (ISR), but interactions fail. | Container restart with health check. | Check Medusa logs. Verify DB connectivity. |
+  1142→| **BullMQ Worker** | ERP sync stops. Orders still placed in Medusa but not pushed to ERP. Notifications not sent. | Container restart. Jobs resume from queue. | Check dead letter queue. Manually re-queue failed jobs. |
+  1143→| **ERPNext** | No inventory updates from ERP. Product sync jobs fail and retry. Orders cannot be pushed to ERP (queue builds). | Container restart (slow, ~60s). | Check ERPNext logs. If prolonged, pause sync jobs to prevent queue buildup. |
+  1144→| **Next.js** | 502 Bad Gateway. No storefront. | Container restart with health check. | Check build logs. Verify upstream connectivity. |
+  1145→
+  1146→### 12.2 Degradation Strategy
+  1147→
+  1148→The system degrades gracefully, not catastrophically:
+  1149→
+  1150→| Scenario | Behavior |
+  1151→|---|---|
+  1152→| **ERPNext is down** | Products display with last-known prices and inventory. Orders are accepted and queued for ERP push when ERPNext recovers. A banner reads: "Prices may be slightly delayed. Confirmed at checkout." |
+  1153→| **Redis is down** | Sessions fall back to JWT tokens in cookies (stateless mode). Caching disabled — all reads hit Medusa directly (slower but functional). Job processing paused until Redis recovers. |
+  1154→| **Medusa is down** | Homepage and category pages serve from ISR cache (stale but visible). Cart and checkout are unavailable. Error page: "We're experiencing issues. Please try again in a few minutes." |
+  1155→| **Worker is down** | All frontend operations work normally. ERP sync accumulates as scheduled jobs in Redis queue. Workers process backlog when they restart. |
+  1156→| **PostgreSQL is down** | Complete outage. Medusa cannot function without its database. Redis-served pages may still render if cached. |
+  1157→
+  1158→### 12.3 Data Consistency Guarantees
+  1159→
+  1160→| Scenario | Guarantee | Resolution |
+  1161→|---|---|---|
+  1162→| Order placed in Medusa but not pushed to ERP | **At-least-once delivery**. The `erp.push.order` job retries until it succeeds. The order will eventually appear in ERP. | Monitor dead letter queue. Manual replay if needed. |
+  1163→| Product price updated in ERP but not synced to Medusa | **Eventually consistent**. Max staleness: 10 minutes (sync interval). | Acceptable for display. Price confirmed at checkout from live Medusa data. |
+  1164→| Inventory shows 5 units in Medusa but ERP says 0 | **ERP wins**. On next sync cycle, Medusa inventory will be corrected. If an order was placed against stale inventory, Medusa's reservation system will flag the oversell. | Customer service contacts the customer. Offer alternative or refund. |
+  1165→| Customer updates profile in GGH but ERP shows old data | **Eventually consistent**. Max staleness: until next `erp.sync.customers` job runs (event-driven, near-immediate). | Acceptable for non-financial data. Accounting uses ERP's copy. |
+  1166→
+  1167→---
+  1168→
+  1169→## 13. Security Boundaries
+  1170→
+  1171→### 13.1 Network Topology
+  1172→
+  1173→```
+  1174→┌─────────────────────────────────────────────────────┐
+  1175→│                  PUBLIC INTERNET                     │
+  1176→│                                                     │
+  1177→│   Browser ──HTTPS──► :443 (Nginx/Caddy)             │
+  1178→│                          │                          │
+  1179→└──────────────────────────┼──────────────────────────┘
+  1180→                           │
+  1181→┌──────────────────────────┼──────────────────────────┐
+  1182→│                  DMZ (Port 3000 only)                │
+  1183→│                          │                          │
+  1184→│                    Next.js Web                       │
+  1185→│                          │                          │
+  1186→└──────────────────────────┼──────────────────────────┘
+  1187→                           │
+  1188→┌──────────────────────────┼──────────────────────────┐
+  1189→│              INTERNAL NETWORK                        │
+  1190→│              (no external access)                    │
+  1191→│                                                     │
+  1192→│   Next.js ──────► Medusa (:9000)                    │
+  1193→│   Next.js ──────► Redis (:6379)                     │
+  1194→│   Worker  ──────► Medusa (:9000)                    │
+  1195→│   Worker  ──────► ERPNext (:8000)                   │
+  1196→│   Worker  ──────► PostgreSQL (:5432)                │
+  1197→│   Worker  ──────► Redis (:6379)                     │
+  1198→│   Medusa  ──────► PostgreSQL (:5432)                │
+  1199→│   Medusa  ──────► Redis (:6379)                     │
+  1200→│   ERPNext ──────► Next.js (:3000) [webhook only]    │
+  1201→│                                                     │
+  1202→└─────────────────────────────────────────────────────┘
+  1203→```
+  1204→
+  1205→### 13.2 Authentication Between Services
+  1206→
+  1207→| Caller | Target | Auth Method |
+  1208→|---|---|---|
+  1209→| Browser | Next.js | Session cookie (`__ggh_sess`) |
+  1210→| Next.js | Medusa Store API | Publishable API key (`x-publishable-api-key` header) + customer JWT (when authenticated) |
+  1211→| Next.js | Medusa Admin API | Admin API key (`x-publishable-api-key` header) |
+  1212→| BullMQ Worker | Medusa Admin API | Admin API key |
+  1213→| BullMQ Worker | ERPNext | `api_key` + `api_secret` in request headers |
+  1214→| ERPNext | Next.js | Shared webhook secret (`x-erpnext-webhook-token`) |
+  1215→| Medusa | Next.js | HMAC-SHA256 signature (`x-medusa-signature`) |
+  1216→
+  1217→### 13.3 Data Protection Rules
+  1218→
+  1219→| Rule | Implementation |
+  1220→|---|---|
+  1221→| **No PII in logs** | Customer names, emails, and phone numbers are never logged. Use customer IDs only. |
+  1222→| **No PII in cache** | Redis cache keys contain entity IDs, not personal data. Session objects are encrypted. |
+  1223→| **No backend URLs in the browser** | The browser only talks to Next.js `/api/*`. Medusa and ERPNext URLs are never exposed in client-side code or network requests. |
+  1224→| **All internal traffic over HTTP** | Within the Docker network, services communicate over plain HTTP. The TLS termination happens at the reverse proxy (Nginx/Caddy) at the edge. |
+  1225→| **Secrets in environment variables only** | API keys, database passwords, and webhook secrets are injected via environment variables. Never committed to code. |
+  1226→| **Rate limiting** | API routes enforce per-IP and per-session rate limits. 100 requests/minute for browsing, 10 requests/minute for checkout. |
+  1227→
+  1228→---
+  1229→
+  1230→## 14. Architectural Decision Records
+  1231→
+  1232→### ADR-001: Monorepo with Turborepo
+  1233→
+  1234→**Context:** The frontend, worker, Medusa extensions, and shared types need to be developed, tested, and deployed together.
+  1235→
+  1236→**Decision:** Use a Turborepo monorepo with three apps (`web`, `worker`, `medusa`) and one shared package (`@ggh/shared`).
+  1237→
+  1238→**Consequences:**
+  1239→- (+) Atomic commits across service boundaries. A type change in `@ggh/shared` is immediately reflected in both the frontend and the worker.
+  1240→- (+) Single CI pipeline. One `turbo lint` and `turbo test` command validates everything.
+  1241→- (-) Larger repository. Clone time is longer. CI runs take longer.
+  1242→- (-) Tighter coupling. Teams must coordinate releases.
+  1243→
+  1244→**Accepted because:** The team is small (≤8 developers). The coupling benefit outweighs the independence benefit at this scale.
+  1245→
+  1246→### ADR-002: Redis for Everything (Cache + Sessions + Queues)
+  1247→
+  1248→**Context:** We need a cache, a session store, and a job queue. These could be three separate systems.
+  1249→
+  1250→**Decision:** Use Redis for all three, with key prefix separation.
+  1251→
+  1252→**Consequences:**
+  1253→- (+) One operational dependency instead of three.
+  1254→- (+) BullMQ is built on Redis natively — no adapter layer.
+  1255→- (-) Memory pressure on one system affects all three.
+  1256→- (-) A Redis outage is catastrophic (mitigated by AOF persistence and health checks).
+  1257→
+  1258→**Accepted because:** Operational simplicity at the current scale. If Redis becomes a bottleneck, we can split into separate instances without changing application code (just change the connection URL per function).
+  1259→
+  1260→### ADR-003: ERPNext as Source of Truth for Inventory and Pricing
+  1261→
+  1262→**Context:** Both Medusa and ERPNext can store product prices and inventory levels.
+  1263→
+  1264→**Decision:** ERPNext is the authoritative source. Medusa holds an operational copy that is periodically synced.
+  1265→
+  1266→**Consequences:**
+  1267→- (+) Financial reports always match the commerce system (single source of truth).
+  1268→- (+) The finance team manages pricing in ERPNext (their tool) without learning Medusa.
+  1269→- (-) Stale data in Medusa (up to 10 minutes for products, 5 minutes for inventory).
+  1270→- (-) Complex sync logic with conflict resolution.
+  1271→
+  1272→**Accepted because:** Accounting integrity is non-negotiable for a business handling real money in Egypt. Staleness is acceptable because the checkout flow re-validates pricing and inventory against the latest data.
+  1273→
+  1274→### ADR-004: Next.js API Routes as BFF (Not a Separate API Gateway)
+  1275→
+  1276→**Context:** We need a layer between the browser and Medusa/ERPNext for auth, validation, and response transformation.
+  1277→
+  1278→**Decision:** Use Next.js API route handlers as the BFF layer. No separate API gateway service (no Kong, no Express gateway).
+  1279→
+  1280→**Consequences:**
+  1281→- (+) One less service to deploy, monitor, and debug.
+  1282→- (+) Frontend and BFF share TypeScript types and utilities directly.
+  1283→- (+) SSR and API routes are in the same deployment unit — no CORS issues.
+  1284→- (-) Rate limiting and request logging must be implemented in Next.js middleware (less mature than dedicated gateway solutions).
+  1285→- (-) Scaling the BFF means scaling the entire Next.js instance.
+  1286→
+  1287→**Accepted because:** The overhead of a separate gateway does not justify itself at current scale. Next.js middleware + API routes handle rate limiting, logging, and validation adequately. We can extract a gateway later if needed.
+  1288→
+  1289→### ADR-005: BullMQ Over Direct Medusa Subscribers for Critical Operations
+  1290→
+  1291→**Context:** Medusa has a built-in subscriber system that can execute code when events fire.
+  1292→
+  1293→**Decision:** Medusa subscribers only enqueue BullMQ jobs. All business logic (ERP sync, notifications) runs in BullMQ processors, not in Medusa subscribers.
+  1294→
+  1295→**Consequences:**
+  1296→- (+) Job retries, backoff, and dead-letter handling come free from BullMQ.
+  1297→- (+) Medusa stays lightweight — it serves API requests, not background jobs.
+  1298→- (+) Job monitoring via BullBoard dashboard.
+  1299→- (-) Additional latency: event → subscriber → enqueue → processor (vs. event → subscriber → done).
+  1300→- (-) Redis dependency for all async operations.
+  1301→
+  1302→**Accepted because:** Reliability > latency for ERP sync and notifications. A 2-second delay in sending an order confirmation is acceptable. A lost order confirmation is not.
+  1303→
+  1304→---
+  1305→
+  1306→*This document is maintained by the GGH engineering team. For proposed changes, open a PR against `docs/02_Architecture.md` and tag `@ggh/arch-reviewers`.*
+  1307→
+  1308→*Last updated: July 2026*
+  1309→

@@ -1,0 +1,1786 @@
+     1→# 07 — API
+     2→
+     3→> **GGH — Gomla Go Home** — API conventions, request/response formats, versioning, authentication, error handling, and endpoint organization. The contract between frontend and backend.
+     4→
+     5→---
+     6→
+     7→## Table of Contents
+     8→
+     9→1. [API Philosophy](#1-api-philosophy)
+    10→2. [Architecture Overview](#2-architecture-overview)
+    11→3. [URL Structure & Versioning](#3-url-structure--versioning)
+    12→4. [Authentication & Authorization](#4-authentication--authorization)
+    13→5. [Request Format](#5-request-format)
+    14→6. [Response Format](#6-response-format)
+    15→7. [Error Responses](#7-error-responses)
+    16→8. [Pagination](#8-pagination)
+    17→9. [Filtering & Sorting](#9-filtering--sorting)
+    18→10. [Endpoint Organization](#10-endpoint-organization)
+    19→11. [BFF Endpoints — Customer](#11-bff-endpoints--customer)
+    20→12. [BFF Endpoints — Product](#12-bff-endpoints--product)
+    21→13. [BFF Endpoints — Cart & Checkout](#13-bff-endpoints--cart--checkout)
+    22→14. [BFF Endpoints — Order](#14-bff-endpoints--order)
+    23→15. [BFF Endpoints — Delivery](#15-bff-endpoints--delivery)
+    24→16. [BFF Endpoints — Account](#16-bff-endpoints--account)
+    25→17. [Admin Endpoints](#17-admin-endpoints)
+    26→18. [Medusa API Proxy Rules](#18-medusa-api-proxy-rules)
+    27→19. [ERPNext Integration Endpoints](#19-erpnext-integration-endpoints)
+    28→20. [Webhook Endpoints](#20-webhook-endpoints)
+    29→21. [Rate Limiting](#21-rate-limiting)
+    30→22. [Caching Strategy](#22-caching-strategy)
+    31→23. [Localization & RTL in API](#23-localization--rtl-in-api)
+    32→24. [Elder-Friendly API Design](#24-elder-friendly-api-design)
+    33→25. [WebSocket Events](#25-websocket-events)
+    34→26. [API Changelog Convention](#26-api-changelog-convention)
+    35→
+    36→---
+    37→
+    38→## 1. API Philosophy
+    39→
+    40→| Principle | Rule | Why |
+    41→|---|---|---|
+    42→| **BFF owns the contract** | The frontend never calls Medusa directly. All requests go through Next.js BFF routes. | Shield the frontend from Medusa API changes. Add GGH-specific logic (delivery, pricing) without coupling. |
+    43→| **Minimal payloads** | Every response includes only what the UI needs. No `SELECT *` leaking into JSON. | Elder users on slow mobile connections. Smaller payloads = faster loads. |
+    44→| **Arabic-first, bilingual always** | API responses include both `name_en` and `name_ar`. The frontend picks based on locale. No server-side locale switching. | RTL/LTR is a presentation concern. The API serves data; the UI renders it. |
+    45→| **Predictable structure** | Every response follows the same envelope. Every error follows the same shape. | Om Ibrahim should never see a raw stack trace. The frontend should never need `if (error.type === ...)` spaghetti. |
+    46→| **Idempotent by default** | `PUT` and `DELETE` are idempotent. `POST` for creation returns the created resource. `PATCH` for partial updates. | Accidental double-taps (elder users) must not create duplicate orders. |
+    47→| **Money as integers** | All monetary values in API payloads are piastres (integer). The frontend formats to EGP. | Same reason as the database: no floating-point errors. EGP 110.50 → `11050`. |
+    48→
+    49→---
+    50→
+    51→## 2. Architecture Overview
+    52→
+    53→```
+    54→┌──────────────────────────────────────────────────────────────────┐
+    55→│                        CLIENT (Browser)                          │
+    56→│                                                                  │
+    57→│   fetch('/api/v1/...')    ──→  Always relative, same origin      │
+    58→│                                                                  │
+    59→└──────────────────────────┬───────────────────────────────────────┘
+    60→                           │
+    61→                           ▼
+    62→┌──────────────────────────────────────────────────────────────────┐
+    63→│                 NEXT.JS BFF  (Port 3000)                         │
+    64→│                                                                  │
+    65→│   /api/v1/*          →  Customer-facing BFF routes               │
+    66→│   /api/admin/v1/*    →  Admin-facing BFF routes                  │
+    67→│   /api/webhooks/*    →  Incoming webhook handlers                │
+    68→│   /api/erp/*         →  ERPNext sync endpoints (internal)        │
+    69→│                                                                  │
+    70→│   ┌─────────────────────────────────────────────────────────┐    │
+    71→│   │  BFF Middleware Stack:                                   │    │
+    72→│   │  1. CORS (same-origin only)                             │    │
+    73→│   │  2. Rate limiter (Redis-backed)                         │    │
+    74→│   │  3. Auth (session JWT validation)                       │    │
+    75→│   │  4. Locale extraction (Accept-Language header)          │    │
+    76→│   │  5. Request logging (trace ID injection)                │    │
+    77→│   │  6. Response envelope wrapping                          │    │
+    78→│   └─────────────────────────────────────────────────────────┘    │
+    79→│                                                                  │
+    80→└────────────┬──────────────────────────┬──────────────────────────┘
+    81→             │                          │
+    82→             ▼                          ▼
+    83→┌──────────────────────┐   ┌──────────────────────────────────────┐
+    84→│   MEDUSA v2          │   │   ERPNext                            │
+    85→│   (Port 9000)        │   │   (Port 8000)                        │
+    86→│                      │   │                                      │
+    87→│   REST API           │   │   REST API                           │
+    88→│   /admin/*           │   │   /api/resource/*                    │
+    89→│   /store/*           │   │                                      │
+    90→│                      │   │   (Internal network only,            │
+    91→│   (Internal network) │   │    never exposed to client)          │
+    92→└──────────────────────┘   └──────────────────────────────────────┘
+    93→```
+    94→
+    95→### Who Calls What
+    96→
+    97→| Caller | Calls | How |
+    98→|---|---|---|
+    99→| Browser | Next.js BFF (`/api/v1/*`) | `fetch()` with credentials |
+   100→| Next.js BFF | Medusa Store API | Server-side HTTP (internal) |
+   101→| Next.js BFF | Medusa Admin API | Server-side HTTP (internal, service token) |
+   102→| Next.js BFF | ERPNext API | Server-side HTTP (internal, API key) |
+   103→| Medusa | PostgreSQL | Prisma / MikroORM (internal) |
+   104→| External webhooks | Next.js `/api/webhooks/*` | HTTPS POST (signature verified) |
+   105→
+   106→---
+   107→
+   108→## 3. URL Structure & Versioning
+   109→
+   110→### 3.1 Version Strategy
+   111→
+   112→| Decision | Choice | Rationale |
+   113→|---|---|---|
+   114→| Versioning style | URL path prefix (`/api/v1/`) | Explicit, cacheable, elder-friendly — no hidden headers to explain |
+   115→| Current version | `v1` | First production release |
+   116→| When to bump | Breaking changes only. Additive changes (new fields, new endpoints) do not bump. | Follow SemVer principles. Clients must ignore unknown fields. |
+   117→| Max supported versions | 2 concurrent (`v1`, `v2` during migration) | We deprecate old versions with 6-month sunset notice. |
+   118→| Medusa API versioning | Handled internally by BFF. Frontend never sees Medusa version numbers. | BFF absorbs Medusa version changes. |
+   119→
+   120→### 3.2 URL Patterns
+   121→
+   122→```
+   123→Customer endpoints:
+   124→  GET    /api/v1/products                    List products
+   125→  GET    /api/v1/products/:id                Get product detail
+   126→  POST   /api/v1/cart                        Create cart
+   127→  POST   /api/v1/cart/items                  Add item to cart
+   128→  GET    /api/v1/orders                      List my orders
+   129→  GET    /api/v1/orders/:id                  Get order detail
+   130→
+   131→Admin endpoints:
+   132→  GET    /api/admin/v1/products              List all products (admin view)
+   133→  PATCH  /api/admin/v1/products/:id          Update product
+   134→  GET    /api/admin/v1/orders                List all orders
+   135→  GET    /api/admin/v1/delivery/zones        List delivery zones
+   136→
+   137→Webhook endpoints:
+   138→  POST   /api/webhooks/medusa                Medusa event webhooks
+   139→  POST   /api/webhooks/payment               Payment provider callbacks
+   140→
+   141→Internal endpoints:
+   142→  POST   /api/erp/sync                       Trigger ERP sync
+   143→  GET    /api/erp/sync/status                Check sync status
+   144→```
+   145→
+   146→### 3.3 URL Naming Rules
+   147→
+   148→| Rule | Convention | Example |
+   149→|---|---|---|
+   150→| Resource names | Plural nouns | `/products`, `/orders`, `/cart/items` |
+   151→| Nested resources | Maximum 2 levels | `/orders/:id/items` ✓ — `/orders/:id/items/:itemId/variants` ✗ |
+   152→| Actions as verbs | Only when not CRUD | `/cart/checkout`, `/auth/login`, `/auth/logout` |
+   153→| No verbs in CRUD | Use HTTP method | `POST /cart/items` (not `POST /cart/add-item`) |
+   154→| Kebab-case for multi-word | `delivery-zones`, `price-tiers` | `/delivery-zones/:id/slots` |
+   155→| IDs in path | Only for single-resource operations | `/products/prod_01ABC` |
+   156→| Query for filtering | Never in path | `/products?category=rice&in_stock=true` |
+   157→
+   158→---
+   159→
+   160→## 4. Authentication & Authorization
+   161→
+   162→### 4.1 Authentication Flow
+   163→
+   164→```
+   165→┌──────────┐         ┌──────────┐         ┌──────────┐
+   166→│  Browser │         │  Next.js │         │  Medusa  │
+   167→│          │         │   BFF    │         │          │
+   168→└────┬─────┘         └────┬─────┘         └────┬─────┘
+   169→     │                    │                    │
+   170→     │  POST /api/v1/    │                    │
+   171→     │  auth/login       │                    │
+   172→     │  { phone, otp }   │                    │
+   173→     │──────────────────→│                    │
+   174→     │                    │  POST /auth/emailpass  │
+   175→     │                    │  (or custom OTP auth)   │
+   176→     │                    │───────────────────→│
+   177→     │                    │                    │
+   178→     │                    │  { token, customer }   │
+   179→     │                    │←───────────────────│
+   180→     │                    │                    │
+   181→     │  Set-Cookie:       │                    │
+   182→     │  ggh_session       │                    │
+   183→     │  (HttpOnly,        │                    │
+   184→     │   Secure, SameSite)│                    │
+   185→     │←──────────────────│                    │
+   186→     │                    │                    │
+   187→     │  GET /api/v1/cart  │                    │
+   188→     │  Cookie: ggh_session                   │
+   189→     │──────────────────→│                    │
+   190→     │                    │  Extract session   │
+   191→     │                    │  Forward to Medusa │
+   192→     │                    │───────────────────→│
+   193→```
+   194→
+   195→### 4.2 Session Strategy
+   196→
+   197→| Property | Value | Why |
+   198→|---|---|---|
+   199→| Token type | HttpOnly cookie (`ggh_session`) | XSS-safe. No token in localStorage. |
+   200→| Cookie attributes | `Secure; SameSite=Strict; Path=/; Max-Age=86400` | 24-hour session. Strict CSRF protection. |
+   201→| Token format | JWT (signed, not encrypted) | Stateless validation. No session store needed for auth. |
+   202→| Guest carts | Session-bound cart ID in cookie | No login required to browse and build a cart. |
+   203→| Admin auth | Separate cookie (`ggh_admin_session`) | Isolated from customer sessions. Different expiry (8 hours). |
+   204→
+   205→### 4.3 JWT Payload Structure
+   206→
+   207→```
+   208→{
+   209→  "sub": "cus_01ABC123",          // Medusa customer ID
+   210→  "phone": "+201012345678",       // Verified phone number
+   211→  "role": "customer",             // "customer" | "admin" | "driver"
+   212→  "zone_id": "zone_01DEF456",     // Customer's delivery zone
+   213→  "iat": 1700000000,              // Issued at
+   214→  "exp": 1700086400               // Expires at (24h)
+   215→}
+   216→```
+   217→
+   218→### 4.4 Authorization Matrix
+   219→
+   220→| Resource | Guest | Customer | Admin | Driver |
+   221→|---|---|---|---|---|
+   222→| Browse products | ✓ | ✓ | ✓ | ✓ |
+   223→| View product detail | ✓ | ✓ | ✓ | ✓ |
+   224→| Create cart | ✓ | ✓ | ✗ | ✗ |
+   225→| Add to cart | ✓ (guest cart) | ✓ | ✗ | ✗ |
+   226→| Checkout | ✗ | ✓ | ✗ | ✗ |
+   227→| View own orders | ✗ | ✓ | ✗ | ✓ (assigned) |
+   228→| View all orders | ✗ | ✗ | ✓ | ✓ (assigned area) |
+   229→| Manage products | ✗ | ✗ | ✓ | ✗ |
+   230→| Manage delivery zones | ✗ | ✗ | ✓ | ✗ |
+   231→| Update order status | ✗ | ✗ | ✓ | ✓ (assigned) |
+   232→| ERP sync triggers | ✗ | ✗ | ✓ | ✗ |
+   233→
+   234→### 4.5 OTP Authentication (Egypt-Specific)
+   235→
+   236→GGH uses phone-based OTP instead of email/password. This is critical for the Egyptian market where many elder users don't use email.
+   237→
+   238→```
+   239→Step 1:  POST /api/v1/auth/otp/request
+   240→         { "phone": "+201012345678" }
+   241→         → SMS sent to phone
+   242→         → Response: { "expires_in": 300 }  (5 minutes)
+   243→
+   244→Step 2:  POST /api/v1/auth/otp/verify
+   245→         { "phone": "+201012345678", "code": "1234" }
+   246→         → On success: Set-Cookie with session
+   247→         → On new customer: auto-create customer record
+   248→         → Response: { "customer": { ... }, "is_new": true }
+   249→```
+   250→
+   251→**OTP Rules:**
+   252→
+   253→| Rule | Value | Why |
+   254→|---|---|---|
+   255→| Code length | 4 digits | Elder-friendly. Easy to read and type. |
+   256→| Expiry | 5 minutes | Security vs. usability balance. |
+   257→| Max attempts | 3 per code | Prevent brute force. |
+   258→| Resend cooldown | 60 seconds | Prevent SMS abuse. |
+   259→| Max sends per day | 5 per phone number | Rate limit SMS costs. |
+   260→
+   261→---
+   262→
+   263→## 5. Request Format
+   264→
+   265→### 5.1 Common Headers
+   266→
+   267→| Header | Required | Description |
+   268→|---|---|---|
+   269→| `Content-Type` | Yes (for body) | `application/json` |
+   270→| `Accept-Language` | Optional | `ar` or `en`. Defaults to `ar` for Egyptian market. |
+   271→| `X-Request-ID` | Optional | Client-generated UUID for tracing. Server generates if missing. |
+   272→| `X-Idempotency-Key` | Optional | For safe retries on `POST` requests. Prevents duplicates. |
+   273→
+   274→### 5.2 Request Body Rules
+   275→
+   276→| Rule | Convention |
+   277→|---|---|
+   278→| Content type | `application/json` only. No form-encoded. |
+   279→| Encoding | UTF-8 always |
+   280→| Null handling | Omit null fields rather than sending `"field": null` |
+   281→| Empty strings | Send `""` for cleared text fields. Never send `"null"` as a string. |
+   282→| Money in requests | Integer (piastres). Client sends `11050` for EGP 110.50. |
+   283→| Phone numbers | E.164 format: `+201012345678` |
+   284→| Dates | ISO 8601: `2025-01-15T10:30:00Z` |
+   285→| IDs | String (Medusa format): `"prod_01ABC"`, `"ord_01DEF"` |
+   286→| Arrays | Always wrap in field: `{ "variant_ids": ["var_01", "var_02"] }` |
+   287→| Bilingual fields | Send both or one: `{ "name_en": "Rice", "name_ar": "أرز" }` |
+   288→
+   289→### 5.3 Example Request
+   290→
+   291→```
+   292→POST /api/v1/cart/items
+   293→Content-Type: application/json
+   294→Accept-Language: ar
+   295→X-Request-ID: req_uuid_abc123
+   296→
+   297→{
+   298→  "variant_id": "variant_01JKL789",
+   299→  "quantity": 2
+   300→}
+   301→```
+   302→
+   303→---
+   304→
+   305→## 6. Response Format
+   306→
+   307→### 6.1 Success Envelope
+   308→
+   309→Every successful response follows this structure:
+   310→
+   311→```
+   312→{
+   313→  "data": T,                    // The actual payload
+   314→  "meta": {                     // Request metadata
+   315→    "request_id": "req_uuid_abc123",
+   316→    "timestamp": "2025-01-15T10:30:00Z"
+   317→  }
+   318→}
+   319→```
+   320→
+   321→For paginated collections:
+   322→
+   323→```
+   324→{
+   325→  "data": [ ... ],              // Array of items
+   326→  "meta": {
+   327→    "request_id": "req_uuid_abc123",
+   328→    "timestamp": "2025-01-15T10:30:00Z"
+   329→  },
+   330→  "pagination": {
+   331→    "page": 1,
+   332→    "per_page": 20,
+   333→    "total": 147,
+   334→    "total_pages": 8,
+   335→    "has_next": true,
+   336→    "has_prev": false
+   337→  }
+   338→}
+   339→```
+   340→
+   341→### 6.2 Field Naming in Responses
+   342→
+   343→| Convention | Rule | Example |
+   344→|---|---|---|
+   345→| camelCase | All JSON keys are camelCase | `variantId`, `createdAt`, `totalAmount` |
+   346→| Money fields | Integer + `_amount` suffix | `totalAmount: 11050` (piastres) |
+   347→| Timestamps | ISO 8601 string | `"createdAt": "2025-01-15T10:30:00Z"` |
+   348→| Bilingual | Both languages always present | `nameEn: "Rice"`, `nameAr: "أرز"` |
+   349→| IDs | String type | `"id": "prod_01ABC"` |
+   350→| Booleans | Always explicit `true`/`false` | `"inStock": true`, never `0`/`1` |
+   351→| Null vs. missing | Missing field = not applicable. Explicit `null` = known absent value. | `discountAmount` missing = no discount. `discountAmount: null` = discount not yet calculated. |
+   352→
+   353→### 6.3 Example Product Response
+   354→
+   355→```
+   356→{
+   357→  "data": {
+   358→    "id": "prod_01JKL789",
+   359→    "nameEn": "Egyptian Rice - 5kg",
+   360→    "nameAr": "أرز مصري - ٥ كيلو",
+   361→    "descriptionEn": "Premium short-grain Egyptian rice",
+   362→    "descriptionAr": "أرز مصري قصير الحبة فاخر",
+   363→    "thumbnail": "/uploads/rice-5kg.jpg",
+   364→    "category": {
+   365→      "id": "cat_01RICE",
+   366→      "nameEn": "Rice & Grains",
+   367→      "nameAr": "أرز وحبوب"
+   368→    },
+   369→    "variants": [
+   370→      {
+   371→        "id": "var_01JKL789",
+   372→        "titleEn": "5kg Bag",
+   373→        "titleAr": "كيس ٥ كيلو",
+   374→        "sku": "RICE-EG-5KG",
+   375→        "priceAmount": 27500,
+   376→        "currencyCode": "EGP",
+   377→        "inStock": true,
+   378→        "stockQuantity": 340,
+   379→        "isCasePack": false,
+   380→        "minOrderQty": 1,
+   381→        "casePackQty": null
+   382→      }
+   383→    ],
+   384→    "tags": ["staple", "wholesale"],
+   385→    "createdAt": "2025-01-10T08:00:00Z",
+   386→    "updatedAt": "2025-01-15T06:30:00Z"
+   387→  },
+   388→  "meta": {
+   389→    "request_id": "req_uuid_abc123",
+   390→    "timestamp": "2025-01-15T10:30:00Z"
+   391→  }
+   392→}
+   393→```
+   394→
+   395→### 6.4 Money Formatting Contract
+   396→
+   397→The API **always** sends piastres (integer). The frontend **always** formats for display.
+   398→
+   399→```
+   400→Database:   27500  (piastres, INTEGER)
+   401→     ↕
+   402→API:        27500  (piastres, JSON number)
+   403→     ↕
+   404→Frontend:   "٢٧٥٫٠٠ ج.م"  (Arabic-Indic numerals, EGP)
+   405→Frontend:   "EGP 275.00"  (Western numerals, EGP)
+   406→```
+   407→
+   408→**No formatting happens in the API.** The API is locale-agnostic.
+   409→
+   410→---
+   411→
+   412→## 7. Error Responses
+   413→
+   414→### 7.1 Error Envelope
+   415→
+   416→Every error follows this exact structure:
+   417→
+   418→```
+   419→{
+   420→  "error": {
+   421→    "code": "CART_ITEM_OUT_OF_STOCK",
+   422→    "message": "The item you selected is no longer available in the quantity requested",
+   423→    "messageAr": "الصنف المحدد غير متوفر بالكمية المطلوبة",
+   424→    "detail": {
+   425→      "variantId": "var_01JKL789",
+   426→      "requestedQty": 10,
+   427→      "availableQty": 3
+   428→    },
+   429→    "docUrl": "https://docs.ggh.eg/api/errors/CART_ITEM_OUT_OF_STOCK"
+   430→  },
+   431→  "meta": {
+   432→    "request_id": "req_uuid_abc123",
+   433→    "timestamp": "2025-01-15T10:30:00Z"
+   434→  }
+   435→}
+   436→```
+   437→
+   438→### 7.2 Error Code System
+   439→
+   440→Error codes are `UPPER_SNAKE_CASE` with a domain prefix. They are **stable** — once published, they never change meaning.
+   441→
+   442→| Domain | Prefix | Examples |
+   443→|---|---|---|
+   444→| Authentication | `AUTH_` | `AUTH_INVALID_OTP`, `AUTH_OTP_EXPIRED`, `AUTH_SESSION_EXPIRED`, `AUTH_UNAUTHORIZED` |
+   445→| Cart | `CART_` | `CART_NOT_FOUND`, `CART_ITEM_OUT_OF_STOCK`, `CART_MIN_QTY_NOT_MET`, `CART_EMPTY_CHECKOUT` |
+   446→| Order | `ORDER_` | `ORDER_NOT_FOUND`, `ORDER_CANT_CANCEL`, `ORDER_ALREADY_DELIVERED` |
+   447→| Product | `PRODUCT_` | `PRODUCT_NOT_FOUND`, `PRODUCT_UNAVAILABLE`, `PRODUCT_VARIANT_NOT_FOUND` |
+   448→| Delivery | `DELIVERY_` | `DELIVERY_ZONE_NOT_COVERED`, `DELIVERY_SLOT_FULL`, `DELIVERY_SLOT_EXPIRED` |
+   449→| Payment | `PAYMENT_` | `PAYMENT_FAILED`, `PAYMENT_TIMEOUT`, `PAYMENT_METHOD_UNSUPPORTED` |
+   450→| Validation | `VALIDATION_` | `VALIDATION_INVALID_PHONE`, `VALIDATION_REQUIRED_FIELD`, `VALIDATION_QTY_TOO_LOW` |
+   451→| System | `SYSTEM_` | `SYSTEM_INTERNAL_ERROR`, `SYSTEM_SERVICE_UNAVAILABLE`, `SYSTEM_RATE_LIMITED` |
+   452→| ERP | `ERP_` | `ERP_SYNC_FAILED`, `ERP_CONNECTION_ERROR`, `ERP_DATA_CONFLICT` |
+   453→
+   454→### 7.3 HTTP Status Code Mapping
+   455→
+   456→| Status | When Used | Example |
+   457→|---|---|---|
+   458→| `200` | Successful retrieval or update | GET product, PATCH order |
+   459→| `201` | Successful creation | POST new cart, POST checkout |
+   460→| `204` | Successful deletion (no body) | DELETE cart item |
+   461→| `400` | Validation error, malformed request | Missing required field, invalid phone format |
+   462→| `401` | Not authenticated | Missing or expired session cookie |
+   463→| `403` | Authenticated but not authorized | Customer trying to access admin endpoint |
+   464→| `404` | Resource not found | Product ID doesn't exist |
+   465→| `409` | Conflict / state violation | Trying to cancel a delivered order |
+   466→| `422` | Business logic validation | Order minimum not met, delivery zone not covered |
+   467→| `429` | Rate limited | Too many OTP requests |
+   468→| `500` | Unexpected server error | Unhandled exception (never expose stack trace) |
+   469→| `502` | Upstream service failure | Medusa or ERPNext is down |
+   470→| `503` | Service temporarily unavailable | Maintenance mode |
+   471→
+   472→### 7.4 Validation Error Detail
+   473→
+   474→When multiple fields fail validation, return all errors at once — never one at a time. This is critical for elder-friendly UX: fix everything in one go.
+   475→
+   476→```
+   477→{
+   478→  "error": {
+   479→    "code": "VALIDATION_MULTIPLE_ERRORS",
+   480→    "message": "Please correct the highlighted fields",
+   481→    "messageAr": "يرجى تصحيح الحقول المحددة",
+   482→    "detail": {
+   483→      "fields": [
+   484→        {
+   485→          "field": "phone",
+   486→          "code": "VALIDATION_INVALID_PHONE",
+   487→          "message": "Phone number must start with +20",
+   488→          "messageAr": "يجب أن يبدأ رقم الهاتف بـ +20"
+   489→        },
+   490→        {
+   491→          "field": "quantity",
+   492→          "code": "VALIDATION_QTY_TOO_LOW",
+   493→          "message": "Minimum order is 5 units for this product",
+   494→          "messageAr": "الحد الأدنى للطلب ٥ وحدات لهذا المنتج"
+   495→        }
+   496→      ]
+   497→    }
+   498→  },
+   499→  "meta": {
+   500→    "request_id": "req_uuid_abc123",
+   501→    "timestamp": "2025-01-15T10:30:00Z"
+   502→  }
+   503→}
+   504→```
+   505→
+   506→### 7.5 Error Rules
+   507→
+   508→| Rule | Why |
+   509→|---|---|
+   510→| **Never expose stack traces** | Security risk. Confusing for users. |
+   511→| **Always include Arabic message** | Elder users see Arabic error messages. |
+   512→| **Always include `request_id`** | Support can trace the exact request in logs. |
+   513→| **Never return raw Medusa errors** | BFF translates Medusa errors into GGH error codes. |
+   514→| **Never return raw ERPNext errors** | Same reason. Wrap and translate. |
+   515→| **5xx errors are generic** | "Something went wrong. Please try again." — no internal details. |
+   516→| **4xx errors are specific** | Tell the user exactly what to fix and how. |
+   517→
+   518→---
+   519→
+   520→## 8. Pagination
+   521→
+   522→### 8.1 Pagination Style
+   523→
+   524→GGH uses **page-based pagination**. Not cursor-based. Why?
+   525→
+   526→| Factor | Decision | Rationale |
+   527→|---|---|---|
+   528→| Page numbers in UI | Elder users understand "Page 3 of 8" | Cursor pagination is opaque and confusing |
+   529→| Dataset size | Product catalog ~500–2000 items | Not large enough to need cursor pagination |
+   530→| Jump to page | Users need to jump to page 5 | Cursor can't do arbitrary page jumps |
+   531→| SEO / sharing | URLs are shareable: `/products?page=3` | Cursor URLs are not human-readable |
+   532→
+   533→### 8.2 Pagination Parameters
+   534→
+   535→| Parameter | Type | Default | Max | Description |
+   536→|---|---|---|---|---|
+   537→| `page` | integer | 1 | — | Page number (1-based) |
+   538→| `per_page` | integer | 20 | 100 | Items per page |
+   539→
+   540→### 8.3 Request Example
+   541→
+   542→```
+   543→GET /api/v1/products?category=rice&page=2&per_page=20
+   544→```
+   545→
+   546→### 8.4 Response Example
+   547→
+   548→```
+   549→{
+   550→  "data": [ ... 20 products ... ],
+   551→  "meta": {
+   552→    "request_id": "req_uuid_abc123",
+   553→    "timestamp": "2025-01-15T10:30:00Z"
+   554→  },
+   555→  "pagination": {
+   556→    "page": 2,
+   557→    "per_page": 20,
+   558→    "total": 47,
+   559→    "total_pages": 3,
+   560→    "has_next": true,
+   561→    "has_prev": true
+   562→  }
+   563→}
+   564→```
+   565→
+   566→### 8.5 Pagination Rules
+   567→
+   568→| Rule | Convention |
+   569→|---|---|
+   570→| Empty page | Return `200` with `data: []` and correct pagination metadata. Not `404`. |
+   571→| `per_page` over max | Silently cap at 100. Don't error. |
+   572→| `page` over total | Return `200` with `data: []` and `has_next: false`. |
+   573→| Zero or negative values | Return `400` with `VALIDATION_INVALID_PARAMETER`. |
+   574→
+   575→---
+   576→
+   577→## 9. Filtering & Sorting
+   578→
+   579→### 9.1 Filter Parameters
+   580→
+   581→Filters are passed as query parameters. Only predefined filters are supported — no arbitrary field filtering.
+   582→
+   583→```
+   584→GET /api/v1/products?category=rice&in_stock=true&price_max=50000&sort=price_asc
+   585→```
+   586→
+   587→### 9.2 Common Filter Patterns
+   588→
+   589→| Filter | Type | Example | Description |
+   590→|---|---|---|---|
+   591→| `category` | string (slug) | `category=rice` | Filter by category slug |
+   592→| `in_stock` | boolean | `in_stock=true` | Only show available items |
+   593→| `price_min` | integer (piastres) | `price_min=5000` | Minimum price filter |
+   594→| `price_max` | integer (piastres) | `price_max=50000` | Maximum price filter |
+   595→| `search` | string | `search=أرز` | Full-text search (Arabic + English) |
+   596→| `tag` | string | `tag=staple` | Filter by product tag |
+   597→| `brand` | string | `brand=egyptian` | Filter by brand slug |
+   598→
+   599→### 9.3 Sort Parameters
+   600→
+   601→| Parameter | Values | Default |
+   602→|---|---|---|
+   603→| `sort` | `price_asc`, `price_desc`, `name_asc`, `name_desc`, `newest`, `popularity` | `popularity` |
+   604→
+   605→Sort values are human-readable strings, not raw column names. This prevents injection and makes the API self-documenting.
+   606→
+   607→### 9.4 Filter Rules
+   608→
+   609→| Rule | Convention |
+   610→|---|---|
+   611→| Unknown filters | Silently ignored. Don't error. |
+   612→| Invalid filter values | Return `400` with `VALIDATION_INVALID_FILTER`. |
+   613→| Multiple filters | AND logic. `category=rice&in_stock=true` = rice AND in stock. |
+   614→| Empty result set | Return `200` with `data: []`. Not `404`. |
+   615→| Search is special | `search` triggers full-text search across `name_en`, `name_ar`, `description_en`, `description_ar`, and `sku`. |
+   616→
+   617→---
+   618→
+   619→## 10. Endpoint Organization
+   620→
+   621→### 10.1 File Structure in Next.js
+   622→
+   623→```
+   624→src/app/api/
+   625→├── v1/                          # Customer API v1
+   626→│   ├── auth/
+   627→│   │   ├── otp/
+   628→│   │   │   ├── request/
+   629→│   │   │   │   └── route.ts     # POST - Request OTP
+   630→│   │   │   └── verify/
+   631→│   │   │       └── route.ts     # POST - Verify OTP
+   632→│   │   ├── logout/
+   633→│   │   │   └── route.ts         # POST - Logout
+   634→│   │   └── session/
+   635→│   │       └── route.ts         # GET - Check session
+   636→│   ├── products/
+   637→│   │   ├── route.ts             # GET - List products
+   638→│   │   └── [id]/
+   639→│   │       └── route.ts         # GET - Product detail
+   640→│   ├── cart/
+   641→│   │   ├── route.ts             # GET - Get cart, POST - Create cart
+   642→│   │   └── items/
+   643→│   │       ├── route.ts         # POST - Add item
+   644→│   │       └── [itemId]/
+   645→│   │           └── route.ts     # PATCH - Update qty, DELETE - Remove
+   646→│   ├── checkout/
+   647→│   │   ├── route.ts             # POST - Initiate checkout
+   648→│   │   ├── delivery/
+   649→│   │   │   ├── zones/
+   650→│   │   │   │   └── route.ts     # GET - Available delivery zones
+   651→│   │   │   └── slots/
+   652→│   │   │       └── route.ts     # GET - Available delivery slots
+   653→│   │   └── complete/
+   654→│   │       └── route.ts         # POST - Complete checkout
+   655→│   ├── orders/
+   656→│   │   ├── route.ts             # GET - List my orders
+   657→│   │   └── [id]/
+   658→│   │       └── route.ts         # GET - Order detail
+   659→│   ├── account/
+   660→│   │   ├── route.ts             # GET - Profile, PATCH - Update profile
+   661→│   │   ├── addresses/
+   662→│   │   │   ├── route.ts         # GET - List, POST - Create
+   663→│   │   │   └── [addressId]/
+   664→│   │   │       └── route.ts     # PATCH - Update, DELETE - Remove
+   665→│   │   └── templates/
+   666→│   │       ├── route.ts         # GET - List order templates
+   667→│   │       └── [templateId]/
+   668→│   │           └── route.ts     # GET - Template detail, DELETE - Remove
+   669→│   ├── categories/
+   670→│   │   ├── route.ts             # GET - List categories
+   671→│   │   └── [slug]/
+   672→│   │       └── route.ts         # GET - Category detail + products
+   673→│   └── search/
+   674→│       └── route.ts             # GET - Search products
+   675→│
+   676→├── admin/
+   677→│   └── v1/                      # Admin API v1
+   678→│       ├── auth/
+   679→│       │   └── login/
+   680→│       │       └── route.ts     # POST - Admin login
+   681→│       ├── products/
+   682→│       │   ├── route.ts         # GET - List, POST - Create
+   683→│       │   └── [id]/
+   684→│       │       └── route.ts     # GET, PATCH - Product management
+   685→│       ├── orders/
+   686→│       │   ├── route.ts         # GET - List all orders
+   687→│       │   └── [id]/
+   688→│       │       └── route.ts     # GET, PATCH - Order management
+   689→│       ├── delivery/
+   690→│       │   ├── zones/
+   691→│       │   │   ├── route.ts     # GET - List, POST - Create
+   692→│       │   │   └── [zoneId]/
+   693→│       │   │       └── route.ts # GET, PATCH, DELETE
+   694→│       │   └── slots/
+   695→│       │       ├── route.ts     # GET - List, POST - Create
+   696→│       │       └── [slotId]/
+   697→│       │           └── route.ts # GET, PATCH, DELETE
+   698→│       ├── erp/
+   699→│       │   ├── sync/
+   700→│       │   │   └── route.ts     # POST - Trigger sync
+   701→│       │   └── sync-status/
+   702→│       │       └── route.ts     # GET - Check sync status
+   703→│       └── dashboard/
+   704→│           └── route.ts         # GET - Dashboard stats
+   705→│
+   706→├── webhooks/                    # Incoming webhooks
+   707→│   ├── medusa/
+   708→│   │   └── route.ts             # POST - Medusa event webhooks
+   709→│   └── payment/
+   710→│       └── route.ts             # POST - Payment provider callbacks
+   711→│
+   712→└── health/
+   713→    └── route.ts                 # GET - Health check
+   714→```
+   715→
+   716→### 10.2 Route Handler Pattern
+   717→
+   718→Every route handler follows this structure:
+   719→
+   720→```
+   721→import { NextRequest, NextResponse } from 'next/server';
+   722→import { withAuth } from '@/lib/api/middleware/auth';
+   723→import { withErrorHandler } from '@/lib/api/middleware/error-handler';
+   724→import { withRateLimit } from '@/lib/api/middleware/rate-limit';
+   725→import { validateRequest } from '@/lib/api/validation';
+   726→import { productSearchSchema } from '@/lib/api/schemas/product';
+   727→import { productService } from '@/services/product';
+   728→
+   729→export const GET = withErrorHandler(
+   730→  withRateLimit('product-list',
+   731→    withAuth(async (request: NextRequest, { user }) => {
+   732→      const params = validateRequest(request, productSearchSchema);
+   733→
+   734→      const result = await productService.search(params);
+   735→
+   736→      return NextResponse.json({
+   737→        data: result.items,
+   738→        meta: {
+   739→          request_id: request.headers.get('x-request-id'),
+   740→          timestamp: new Date().toISOString(),
+   741→        },
+   742→        pagination: result.pagination,
+   743→      });
+   744→    }, { optional: true })   // optional auth = guests can browse
+   745→  )
+   746→);
+   747→```
+   748→
+   749→---
+   750→
+   751→## 11. BFF Endpoints — Customer
+   752→
+   753→### 11.1 Authentication
+   754→
+   755→| Method | Endpoint | Auth | Description |
+   756→|---|---|---|---|
+   757→| `POST` | `/api/v1/auth/otp/request` | None | Send OTP to phone number |
+   758→| `POST` | `/api/v1/auth/otp/verify` | None | Verify OTP and create session |
+   759→| `POST` | `/api/v1/auth/logout` | Customer | Destroy session |
+   760→| `GET` | `/api/v1/auth/session` | Customer | Check if session is valid |
+   761→
+   762→**OTP Request:**
+   763→
+   764→```
+   765→Request:
+   766→  POST /api/v1/auth/otp/request
+   767→  { "phone": "+201012345678" }
+   768→
+   769→Success (200):
+   770→  { "data": { "expires_in": 300, "resend_cooldown": 60 }, "meta": { ... } }
+   771→
+   772→Error (429):
+   773→  { "error": { "code": "SYSTEM_RATE_LIMITED", "message": "Too many OTP requests. Try again later.", "messageAr": "طلبات كثيرة. حاول لاحقاً." }, "meta": { ... } }
+   774→```
+   775→
+   776→**OTP Verify:**
+   777→
+   778→```
+   779→Request:
+   780→  POST /api/v1/auth/otp/verify
+   781→  { "phone": "+201012345678", "code": "1234" }
+   782→
+   783→Success (200):
+   784→  {
+   785→    "data": {
+   786→      "customer": { "id": "cus_01ABC", "phone": "+201012345678", "nameEn": null, "nameAr": null },
+   787→      "is_new": true
+   788→    },
+   789→    "meta": { ... }
+   790→  }
+   791→  + Set-Cookie: ggh_session=eyJ...; HttpOnly; Secure; SameSite=Strict; Max-Age=86400; Path=/
+   792→
+   793→Error (401):
+   794→  { "error": { "code": "AUTH_INVALID_OTP", "message": "The code you entered is incorrect", "messageAr": "الكود الذي أدخلته غير صحيح" }, "meta": { ... } }
+   795→```
+   796→
+   797→### 11.2 Products
+   798→
+   799→| Method | Endpoint | Auth | Description |
+   800→|---|---|---|---|
+   801→| `GET` | `/api/v1/products` | Optional | List/search products with filters |
+   802→| `GET` | `/api/v1/products/:id` | Optional | Get product detail with variants |
+   803→| `GET` | `/api/v1/categories` | Optional | List all categories |
+   804→| `GET` | `/api/v1/categories/:slug` | Optional | Category detail with products |
+   805→| `GET` | `/api/v1/search` | Optional | Full-text search across products |
+   806→
+   807→**Product List:**
+   808→
+   809→```
+   810→GET /api/v1/products?category=rice&in_stock=true&sort=price_asc&page=1&per_page=20
+   811→
+   812→Response (200):
+   813→{
+   814→  "data": [
+   815→    {
+   816→      "id": "prod_01JKL",
+   817→      "nameEn": "Egyptian Rice - 5kg",
+   818→      "nameAr": "أرز مصري - ٥ كيلو",
+   819→      "thumbnail": "/uploads/rice-5kg.jpg",
+   820→      "priceRange": {
+   821→        "minAmount": 27500,
+   822→        "maxAmount": 27500,
+   823→        "currencyCode": "EGP"
+   824→      },
+   825→      "inStock": true,
+   826→      "category": { "id": "cat_01RICE", "nameEn": "Rice & Grains", "nameAr": "أرز وحبوب" }
+   827→    }
+   828→  ],
+   829→  "meta": { ... },
+   830→  "pagination": { "page": 1, "per_page": 20, "total": 12, "total_pages": 1, "has_next": false, "has_prev": false }
+   831→}
+   832→```
+   833→
+   834→**Product Detail:**
+   835→
+   836→```
+   837→GET /api/v1/products/prod_01JKL
+   838→
+   839→Response (200):
+   840→{
+   841→  "data": {
+   842→    "id": "prod_01JKL",
+   843→    "nameEn": "Egyptian Rice - 5kg",
+   844→    "nameAr": "أرز مصري - ٥ كيلو",
+   845→    "descriptionEn": "Premium short-grain Egyptian rice, perfect for everyday cooking.",
+   846→    "descriptionAr": "أرز مصري قصير الحبة فاخر، مثالي للطبخ اليومي.",
+   847→    "thumbnail": "/uploads/rice-5kg.jpg",
+   848→    "images": ["/uploads/rice-5kg.jpg", "/uploads/rice-5kg-2.jpg"],
+   849→    "category": {
+   850→      "id": "cat_01RICE",
+   851→      "nameEn": "Rice & Grains",
+   852→      "nameAr": "أرز وحبوب"
+   853→    },
+   854→    "variants": [
+   855→      {
+   856→        "id": "var_01JKL",
+   857→        "titleEn": "5kg Bag",
+   858→        "titleAr": "كيس ٥ كيلو",
+   859→        "sku": "RICE-EG-5KG",
+   860→        "priceAmount": 27500,
+   861→        "originalPriceAmount": null,
+   862→        "currencyCode": "EGP",
+   863→        "inStock": true,
+   864→        "stockQuantity": 340,
+   865→        "isCasePack": false,
+   866→        "minOrderQty": 1,
+   867→        "casePackQty": null,
+   868→        "unitLabelEn": "Bag",
+   869→        "unitLabelAr": "كيس"
+   870→      },
+   871→      {
+   872→        "id": "var_02JKL",
+   873→        "titleEn": "25kg Sack (Case Pack)",
+   874→        "titleAr": "شيكارة ٢٥ كيلو (جملة)",
+   875→        "sku": "RICE-EG-25KG",
+   876→        "priceAmount": 125000,
+   877→        "originalPriceAmount": 137500,
+   878→        "currencyCode": "EGP",
+   879→        "inStock": true,
+   880→        "stockQuantity": 85,
+   881→        "isCasePack": true,
+   882→        "minOrderQty": 1,
+   883→        "casePackQty": 25,
+   884→        "unitLabelEn": "Sack",
+   885→        "unitLabelAr": "شيكارة"
+   886→      }
+   887→    ],
+   888→    "tags": ["staple", "wholesale"],
+   889→    "relatedProducts": ["prod_02WHEAT", "prod_03PASTA"]
+   890→  },
+   891→  "meta": { ... }
+   892→}
+   893→```
+   894→
+   895→### 11.3 Categories
+   896→
+   897→```
+   898→GET /api/v1/categories
+   899→
+   900→Response (200):
+   901→{
+   902→  "data": [
+   903→    {
+   904→      "id": "cat_01RICE",
+   905→      "nameEn": "Rice & Grains",
+   906→      "nameAr": "أرز وحبوب",
+   907→      "slug": "rice-grains",
+   908→      "thumbnail": "/uploads/cat-rice.jpg",
+   909→      "productCount": 12,
+   910→      "parentCategory": null
+   911→    },
+   912→    {
+   913→      "id": "cat_02OIL",
+   914→      "nameEn": "Oils & Ghee",
+   915→      "nameAr": "زيوت وسمنة",
+   916→      "slug": "oils-ghee",
+   917→      "thumbnail": "/uploads/cat-oil.jpg",
+   918→      "productCount": 8,
+   919→      "parentCategory": null
+   920→    }
+   921→  ],
+   922→  "meta": { ... }
+   923→}
+   924→```
+   925→
+   926→---
+   927→
+   928→## 12. BFF Endpoints — Product
+   929→
+   930→### 12.1 Search
+   931→
+   932→```
+   933→GET /api/v1/search?q=أرز&per_page=10
+   934→
+   935→Response (200):
+   936→{
+   937→  "data": {
+   938→    "query": "أرز",
+   939→    "products": [ ... ],
+   940→    "categories": [
+   941→      { "id": "cat_01RICE", "nameEn": "Rice & Grains", "nameAr": "أرز وحبوب", "slug": "rice-grains" }
+   942→    ]
+   943→  },
+   944→  "meta": { ... },
+   945→  "pagination": { ... }
+   946→}
+   947→```
+   948→
+   949→Search rules:
+   950→
+   951→| Rule | Convention |
+   952→|---|---|
+   953→| Minimum query length | 2 characters. Return empty for 0–1 chars. |
+   954→| Arabic normalization | Strip diacritics (tashkeel) before searching. |
+   955→| Bilingual search | Search both `_en` and `_ar` columns regardless of query script. |
+   956→| Fuzzy matching | Use PostgreSQL `pg_trgm` with similarity threshold 0.3. |
+   957→| Result limit | Max 50 results per search. |
+   958→
+   959→---
+   960→
+   961→## 13. BFF Endpoints — Cart & Checkout
+   962→
+   963→### 13.1 Cart
+   964→
+   965→| Method | Endpoint | Auth | Description |
+   966→|---|---|---|---|
+   967→| `GET` | `/api/v1/cart` | Optional | Get current cart (creates if missing) |
+   968→| `POST` | `/api/v1/cart/items` | Optional | Add item to cart |
+   969→| `PATCH` | `/api/v1/cart/items/:itemId` | Optional | Update item quantity |
+   970→| `DELETE` | `/api/v1/cart/items/:itemId` | Optional | Remove item from cart |
+   971→| `DELETE` | `/api/v1/cart` | Optional | Clear entire cart |
+   972→
+   973→**Add to Cart:**
+   974→
+   975→```
+   976→Request:
+   977→  POST /api/v1/cart/items
+   978→  { "variant_id": "var_01JKL", "quantity": 2 }
+   979→
+   980→Response (200):
+   981→{
+   982→  "data": {
+   983→    "id": "cart_01XYZ",
+   984→    "items": [
+   985→      {
+   986→        "id": "item_01AA",
+   987→        "variantId": "var_01JKL",
+   988→        "nameEn": "Egyptian Rice - 5kg",
+   989→        "nameAr": "أرز مصري - ٥ كيلو",
+   990→        "thumbnail": "/uploads/rice-5kg.jpg",
+   991→        "quantity": 2,
+   992→        "unitPriceAmount": 27500,
+   993→        "totalPriceAmount": 55000,
+   994→        "currencyCode": "EGP",
+   995→        "inStock": true,
+   996→        "maxQuantity": 340
+   997→      }
+   998→    ],
+   999→    "summary": {
+  1000→      "subtotalAmount": 55000,
+  1001→      "deliveryFeeAmount": 2500,
+  1002→      "discountAmount": 0,
+  1003→      "totalAmount": 57500,
+  1004→      "currencyCode": "EGP",
+  1005→      "itemCount": 1
+  1006→    }
+  1007→  },
+  1008→  "meta": { ... }
+  1009→}
+  1010→```
+  1011→
+  1012→**Cart Error — Out of Stock:**
+  1013→
+  1014→```
+  1015→Request:
+  1016→  POST /api/v1/cart/items
+  1017→  { "variant_id": "var_01JKL", "quantity": 500 }
+  1018→
+  1019→Response (409):
+  1020→{
+  1021→  "error": {
+  1022→    "code": "CART_ITEM_OUT_OF_STOCK",
+  1023→    "message": "Only 340 units available. Would you like to add the maximum available?",
+  1024→    "messageAr": "٣٤٠ وحدة متاحة فقط. هل تريد إضافة أقصى كمية متاحة؟",
+  1025→    "detail": {
+  1026→      "variantId": "var_01JKL",
+  1027→      "requestedQty": 500,
+  1028→      "availableQty": 340
+  1029→    }
+  1030→  },
+  1031→  "meta": { ... }
+  1032→}
+  1033→```
+  1034→
+  1035→### 13.2 Checkout Flow
+  1036→
+  1037→```
+  1038→Step 1:  GET  /api/v1/checkout/delivery/zones      → Pick delivery zone
+  1039→Step 2:  GET  /api/v1/checkout/delivery/slots?zone_id=zone_01  → Pick delivery slot
+  1040→Step 3:  POST /api/v1/checkout                      → Submit checkout
+  1041→Step 4:  POST /api/v1/checkout/complete             → Confirm after payment
+  1042→```
+  1043→
+  1044→**Checkout Submission:**
+  1045→
+  1046→```
+  1047→Request:
+  1048→  POST /api/v1/checkout
+  1049→  {
+  1050→    "delivery_zone_id": "zone_01CAIRO",
+  1051→    "delivery_slot_id": "slot_01MORNING",
+  1052→    "delivery_address_id": "addr_01HOME",
+  1053→    "payment_method": "cash_on_delivery",
+  1054→    "customer_notes": "Ring the doorbell loudly please"
+  1055→  }
+  1056→
+  1057→Response (200):
+  1058→{
+  1059→  "data": {
+  1060→    "orderId": "ord_01CHECKOUT",
+  1061→    "status": "pending",
+  1062→    "totalAmount": 57500,
+  1063→    "currencyCode": "EGP",
+  1064→    "deliveryWindow": {
+  1065→      "date": "2025-01-16",
+  1066→      "slotEn": "Morning (8 AM - 12 PM)",
+  1067→      "slotAr": "الصبح (٨ ص - ١٢ م)"
+  1068→    },
+  1069→    "paymentMethod": "cash_on_delivery",
+  1070→    "estimatedDelivery": "2025-01-16T12:00:00Z"
+  1071→  },
+  1072→  "meta": { ... }
+  1073→}
+  1074→```
+  1075→
+  1076→---
+  1077→
+  1078→## 14. BFF Endpoints — Order
+  1079→
+  1080→| Method | Endpoint | Auth | Description |
+  1081→|---|---|---|---|
+  1082→| `GET` | `/api/v1/orders` | Customer | List my orders |
+  1083→| `GET` | `/api/v1/orders/:id` | Customer | Order detail with items and timeline |
+  1084→
+  1085→**Order List:**
+  1086→
+  1087→```
+  1088→GET /api/v1/orders?page=1&per_page=10
+  1089→
+  1090→Response (200):
+  1091→{
+  1092→  "data": [
+  1093→    {
+  1094→      "id": "ord_01ABC",
+  1095→      "status": "delivered",
+  1096→      "statusLabelEn": "Delivered",
+  1097→      "statusLabelAr": "تم التوصيل",
+  1098→      "totalAmount": 57500,
+  1099→      "currencyCode": "EGP",
+  1100→      "itemCount": 3,
+  1101→      "createdAt": "2025-01-10T14:30:00Z",
+  1102→      "deliveredAt": "2025-01-11T10:15:00Z",
+  1103→      "deliverySlot": {
+  1104→        "date": "2025-01-11",
+  1105→        "slotAr": "الصبح (٨ ص - ١٢ م)"
+  1106→      }
+  1107→    }
+  1108→  ],
+  1109→  "meta": { ... },
+  1110→  "pagination": { ... }
+  1111→}
+  1112→```
+  1113→
+  1114→**Order Detail:**
+  1115→
+  1116→```
+  1117→GET /api/v1/orders/ord_01ABC
+  1118→
+  1119→Response (200):
+  1120→{
+  1121→  "data": {
+  1122→    "id": "ord_01ABC",
+  1123→    "status": "delivered",
+  1124→    "statusLabelEn": "Delivered",
+  1125→    "statusLabelAr": "تم التوصيل",
+  1126→    "items": [
+  1127→      {
+  1128→        "id": "item_01AA",
+  1129→        "nameEn": "Egyptian Rice - 5kg",
+  1130→        "nameAr": "أرز مصري - ٥ كيلو",
+  1131→        "thumbnail": "/uploads/rice-5kg.jpg",
+  1132→        "quantity": 2,
+  1133→        "unitPriceAmount": 27500,
+  1134→        "totalPriceAmount": 55000,
+  1135→        "currencyCode": "EGP"
+  1136→      }
+  1137→    ],
+  1138→    "summary": {
+  1139→      "subtotalAmount": 55000,
+  1140→      "deliveryFeeAmount": 2500,
+  1141→      "discountAmount": 0,
+  1142→      "totalAmount": 57500,
+  1143→      "currencyCode": "EGP"
+  1144→    },
+  1145→    "delivery": {
+  1146→      "zoneNameEn": "Cairo - Nasr City",
+  1147→      "zoneNameAr": "القاهرة - مدينة نصر",
+  1148→      "addressEn": "5 Abbas El-Akkad St., Nasr City",
+  1149→      "addressAr": "٥ شارع عباس العقاد، مدينة نصر",
+  1150→      "slotDate": "2025-01-11",
+  1151→      "slotEn": "Morning (8 AM - 12 PM)",
+  1152→      "slotAr": "الصبح (٨ ص - ١٢ م)"
+  1153→    },
+  1154→    "payment": {
+  1155→      "method": "cash_on_delivery",
+  1156→      "methodLabelEn": "Cash on Delivery",
+  1157→      "methodLabelAr": "الدفع عند الاستلام",
+  1158→      "status": "captured"
+  1159→    },
+  1160→    "timeline": [
+  1161→      { "status": "pending", "timestamp": "2025-01-10T14:30:00Z", "labelEn": "Order Placed", "labelAr": "تم تأكيد الطلب" },
+  1162→      { "status": "confirmed", "timestamp": "2025-01-10T15:00:00Z", "labelEn": "Confirmed", "labelAr": "تم التأكيد" },
+  1163→      { "status": "out_for_delivery", "timestamp": "2025-01-11T08:30:00Z", "labelEn": "Out for Delivery", "labelAr": "في الطريق" },
+  1164→      { "status": "delivered", "timestamp": "2025-01-11T10:15:00Z", "labelEn": "Delivered", "labelAr": "تم التوصيل" }
+  1165→    ],
+  1166→    "createdAt": "2025-01-10T14:30:00Z",
+  1167→    "updatedAt": "2025-01-11T10:15:00Z"
+  1168→  },
+  1169→  "meta": { ... }
+  1170→}
+  1171→```
+  1172→
+  1173→---
+  1174→
+  1175→## 15. BFF Endpoints — Delivery
+  1176→
+  1177→| Method | Endpoint | Auth | Description |
+  1178→|---|---|---|---|
+  1179→| `GET` | `/api/v1/checkout/delivery/zones` | Customer | Available delivery zones |
+  1180→| `GET` | `/api/v1/checkout/delivery/slots?zone_id=X` | Customer | Available slots for a zone |
+  1181→
+  1182→**Delivery Zones:**
+  1183→
+  1184→```
+  1185→GET /api/v1/checkout/delivery/zones
+  1186→
+  1187→Response (200):
+  1188→{
+  1189→  "data": [
+  1190→    {
+  1191→      "id": "zone_01CAIRO",
+  1192→      "nameEn": "Cairo - Nasr City",
+  1193→      "nameAr": "القاهرة - مدينة نصر",
+  1194→      "baseDeliveryFeeAmount": 2500,
+  1195→      "freeDeliveryThresholdAmount": 100000,
+  1196→      "estimatedHoursEn": "Next day",
+  1197→      "estimatedHoursAr": "اليوم التالي",
+  1198→      "isAvailable": true
+  1199→    }
+  1200→  ],
+  1201→  "meta": { ... }
+  1202→}
+  1203→```
+  1204→
+  1205→**Delivery Slots:**
+  1206→
+  1207→```
+  1208→GET /api/v1/checkout/delivery/slots?zone_id=zone_01CAIRO&date=2025-01-16
+  1209→
+  1210→Response (200):
+  1211→{
+  1212→  "data": [
+  1213→    {
+  1214→      "id": "slot_01MORNING",
+  1215→      "labelEn": "Morning (8 AM - 12 PM)",
+  1216→      "labelAr": "الصبح (٨ ص - ١٢ م)",
+  1217→      "date": "2025-01-16",
+  1218→      "availableOrders": 5,
+  1219→      "isAvailable": true
+  1220→    },
+  1221→    {
+  1222→      "id": "slot_02EVENING",
+  1223→      "labelEn": "Evening (4 PM - 8 PM)",
+  1224→      "labelAr": "بعد العصر (٤ م - ٨ م)",
+  1225→      "date": "2025-01-16",
+  1226→      "availableOrders": 0,
+  1227→      "isAvailable": false
+  1228→    }
+  1229→  ],
+  1230→  "meta": { ... }
+  1231→}
+  1232→```
+  1233→
+  1234→---
+  1235→
+  1236→## 16. BFF Endpoints — Account
+  1237→
+  1238→| Method | Endpoint | Auth | Description |
+  1239→|---|---|---|---|
+  1240→| `GET` | `/api/v1/account` | Customer | Get profile |
+  1241→| `PATCH` | `/api/v1/account` | Customer | Update profile |
+  1242→| `GET` | `/api/v1/account/addresses` | Customer | List addresses |
+  1243→| `POST` | `/api/v1/account/addresses` | Customer | Add address |
+  1244→| `PATCH` | `/api/v1/account/addresses/:addressId` | Customer | Update address |
+  1245→| `DELETE` | `/api/v1/account/addresses/:addressId` | Customer | Delete address |
+  1246→| `GET` | `/api/v1/account/templates` | Customer | List order templates |
+  1247→| `POST` | `/api/v1/account/templates` | Customer | Create order template |
+  1248→| `GET` | `/api/v1/account/templates/:templateId` | Customer | Template detail |
+  1249→| `DELETE` | `/api/v1/account/templates/:templateId` | Customer | Delete template |
+  1250→
+  1251→**Profile:**
+  1252→
+  1253→```
+  1254→GET /api/v1/account
+  1255→
+  1256→Response (200):
+  1257→{
+  1258→  "data": {
+  1259→    "id": "cus_01ABC",
+  1260→    "phone": "+201012345678",
+  1261→    "nameEn": "Ibrahim Mohamed",
+  1262→    "nameAr": "إبراهيم محمد",
+  1263→    "email": null,
+  1264→    "defaultDeliveryZoneId": "zone_01CAIRO",
+  1265→    "addresses": [
+  1266→      {
+  1267→        "id": "addr_01HOME",
+  1268→        "labelEn": "Home",
+  1269→        "labelAr": "البيت",
+  1270→        "address1En": "5 Abbas El-Akkad St.",
+  1271→        "address1Ar": "٥ شارع عباس العقاد",
+  1272→        "cityEn": "Cairo",
+  1273→        "cityAr": "القاهرة",
+  1274→        "isDefault": true
+  1275→      }
+  1276→    ],
+  1277→    "orderStats": {
+  1278→      "totalOrders": 12,
+  1279→      "totalSpentAmount": 450000,
+  1280→      "currencyCode": "EGP"
+  1281→    },
+  1282→    "createdAt": "2024-06-15T10:00:00Z"
+  1283→  },
+  1284→  "meta": { ... }
+  1285→}
+  1286→```
+  1287→
+  1288→**Order Template (Reorder Feature):**
+  1289→
+  1290→```
+  1291→GET /api/v1/account/templates
+  1292→
+  1293→Response (200):
+  1294→{
+  1295→  "data": [
+  1296→    {
+  1297→      "id": "tpl_01WEEKLY",
+  1298→      "nameEn": "Weekly Essentials",
+  1299→      "nameAr": "احتياجات الأسبوع",
+  1300→      "itemCount": 5,
+  1301→      "estimatedTotalAmount": 125000,
+  1302→      "currencyCode": "EGP",
+  1303→      "lastOrderedAt": "2025-01-08T14:00:00Z"
+  1304→    }
+  1305→  ],
+  1306→  "meta": { ... }
+  1307→}
+  1308→```
+  1309→
+  1310→---
+  1311→
+  1312→## 17. Admin Endpoints
+  1313→
+  1314→All admin endpoints require the `ggh_admin_session` cookie with `role: "admin"`.
+  1315→
+  1316→### 17.1 Admin Auth
+  1317→
+  1318→| Method | Endpoint | Description |
+  1319→|---|---|---|
+  1320→| `POST` | `/api/admin/v1/auth/login` | Email/password login |
+  1321→| `POST` | `/api/admin/v1/auth/logout` | Destroy admin session |
+  1322→| `GET` | `/api/admin/v1/auth/session` | Check admin session |
+  1323→
+  1324→### 17.2 Admin Resources
+  1325→
+  1326→| Method | Endpoint | Description |
+  1327→|---|---|---|
+  1328→| `GET` | `/api/admin/v1/dashboard` | Dashboard statistics |
+  1329→| `GET` | `/api/admin/v1/products` | All products (including unpublished) |
+  1330→| `POST` | `/api/admin/v1/products` | Create product |
+  1331→| `GET` | `/api/admin/v1/products/:id` | Product detail (admin view) |
+  1332→| `PATCH` | `/api/admin/v1/products/:id` | Update product |
+  1333→| `GET` | `/api/admin/v1/orders` | All orders |
+  1334→| `GET` | `/api/admin/v1/orders/:id` | Order detail (admin view) |
+  1335→| `PATCH` | `/api/admin/v1/orders/:id` | Update order status |
+  1336→| `GET` | `/api/admin/v1/delivery/zones` | List delivery zones |
+  1337→| `POST` | `/api/admin/v1/delivery/zones` | Create zone |
+  1338→| `PATCH` | `/api/admin/v1/delivery/zones/:zoneId` | Update zone |
+  1339→| `GET` | `/api/admin/v1/delivery/slots` | List delivery slots |
+  1340→| `POST` | `/api/admin/v1/delivery/slots` | Create slot |
+  1341→| `PATCH` | `/api/admin/v1/delivery/slots/:slotId` | Update slot |
+  1342→| `GET` | `/api/admin/v1/erp/sync/status` | Last sync status |
+  1343→| `POST` | `/api/admin/v1/erp/sync` | Trigger ERP sync |
+  1344→
+  1345→### 17.3 Dashboard Response
+  1346→
+  1347→```
+  1348→GET /api/admin/v1/dashboard
+  1349→
+  1350→Response (200):
+  1351→{
+  1352→  "data": {
+  1353→    "today": {
+  1354→      "ordersCount": 23,
+  1355→      "revenueAmount": 2850000,
+  1356→      "currencyCode": "EGP",
+  1357→      "avgOrderAmount": 123913
+  1358→    },
+  1359→    "pendingDeliveries": 8,
+  1360→    "lowStockProducts": 3,
+  1361→    "recentOrders": [ ... last 5 orders ... ]
+  1362→  },
+  1363→  "meta": { ... }
+  1364→}
+  1365→```
+  1366→
+  1367→---
+  1368→
+  1369→## 18. Medusa API Proxy Rules
+  1370→
+  1371→The BFF acts as a smart proxy to Medusa. It never passes Medusa responses through unchanged.
+  1372→
+  1373→### 18.1 Translation Layer
+  1374→
+  1375→```
+  1376→Browser Request          BFF Processing              Medusa Call
+  1377→───────────────          ───────────────              ───────────
+  1378→GET /api/v1/products     → Validate params            → GET /store/products
+  1379→                         → Add GGH price tiers         →  (with includes)
+  1380→                         → Add delivery zone context
+  1381→                         → Transform response
+  1382→                         → Wrap in envelope
+  1383→                         ← Return to browser
+  1384→```
+  1385→
+  1386→### 18.2 Proxy Rules
+  1387→
+  1388→| Rule | Implementation |
+  1389→|---|---|
+  1390→| **Never expose Medusa URLs** | BFF maps GGH paths to Medusa paths internally. |
+  1391→| **Translate error codes** | Medusa's `invalid_input` → GGH's `VALIDATION_REQUIRED_FIELD`. |
+  1392→| **Inject GGH data** | Price tiers, delivery zones, and stock levels from `ggh` schema are merged into Medusa responses. |
+  1393→| **Strip internal IDs** | Remove Medusa internal fields the frontend doesn't need. |
+  1394→| **Add computed fields** | `isCasePack`, `minOrderQty`, `estimatedTotalAmount`. |
+  1395→| **Cache product reads** | Product list and detail are cached in Redis with 5-minute TTL. |
+  1396→| **Don't cache cart/order** | Cart and order data is always fresh. |
+  1397→
+  1398→### 18.3 Request Forwarding
+  1399→
+  1400→| BFF Path | Medusa Path | Method |
+  1401→|---|---|---|
+  1402→| `GET /api/v1/products` | `GET /store/products` | Proxy with filter translation |
+  1403→| `GET /api/v1/products/:id` | `GET /store/products/:id` | Proxy with enrichment |
+  1404→| `POST /api/v1/cart/items` | `POST /store/carts/:id/line-items` | Proxy with validation |
+  1405→| `POST /api/v1/checkout` | `POST /store/carts/:id/complete` | Proxy with delivery data |
+  1406→| `GET /api/v1/orders` | `GET /store/orders` | Proxy with auth |
+  1407→| `GET /api/admin/v1/products` | `GET /admin/products` | Proxy with admin auth |
+  1408→
+  1409→---
+  1410→
+  1411→## 19. ERPNext Integration Endpoints
+  1412→
+  1413→These are **internal-only** endpoints. They are never called by the browser. They are called by BullMQ workers or admin triggers.
+  1414→
+  1415→| Method | Endpoint | Description |
+  1416→|---|---|---|
+  1417→| `POST` | `/api/erp/sync` | Trigger full or incremental ERP sync |
+  1418→| `GET` | `/api/erp/sync/status` | Get last sync status and timestamp |
+  1419→| `POST` | `/api/erp/push/order` | Push order data to ERPNext |
+  1420→
+  1421→**Sync Trigger:**
+  1422→
+  1423→```
+  1424→POST /api/erp/sync
+  1425→{
+  1426→  "type": "incremental",          // "full" | "incremental"
+  1427→  "entities": ["products", "stock", "pricing"],
+  1428→  "since": "2025-01-15T00:00:00Z"  // Only for incremental
+  1429→}
+  1430→
+  1431→Response (202):
+  1432→{
+  1433→  "data": {
+  1434→    "jobId": "job_01SYNC",
+  1435→    "status": "queued",
+  1436→    "entities": ["products", "stock", "pricing"]
+  1437→  },
+  1438→  "meta": { ... }
+  1439→}
+  1440→```
+  1441→
+  1442→**Sync Status:**
+  1443→
+  1444→```
+  1445→GET /api/erp/sync/status
+  1446→
+  1447→Response (200):
+  1448→{
+  1449→  "data": {
+  1450→    "lastSyncAt": "2025-01-15T10:00:00Z",
+  1451→    "lastSyncStatus": "completed",
+  1452→    "nextScheduledAt": "2025-01-15T22:00:00Z",
+  1453→    "entities": {
+  1454→      "products": { "lastSyncAt": "...", "recordCount": 450, "status": "completed" },
+  1455→      "stock": { "lastSyncAt": "...", "recordCount": 380, "status": "completed" },
+  1456→      "pricing": { "lastSyncAt": "...", "recordCount": 380, "status": "completed" }
+  1457→    }
+  1458→  },
+  1459→  "meta": { ... }
+  1460→}
+  1461→```
+  1462→
+  1463→---
+  1464→
+  1465→## 20. Webhook Endpoints
+  1466→
+  1467→### 20.1 Medusa Webhooks
+  1468→
+  1469→```
+  1470→POST /api/webhooks/medusa
+  1471→X-Medusa-Signature: sha256=abcdef...
+  1472→
+  1473→Payload:
+  1474→{
+  1475→  "event": "order.placed",
+  1476→  "data": { "id": "ord_01ABC" },
+  1477→  "timestamp": "2025-01-15T10:30:00Z"
+  1478→}
+  1479→```
+  1480→
+  1481→**Handled Events:**
+  1482→
+  1483→| Event | Action |
+  1484→|---|---|
+  1485→| `order.placed` | Trigger ERP push job. Send customer notification. |
+  1486→| `order.shipped` | Send "out for delivery" SMS to customer. |
+  1487→| `order.delivered` | Send "delivered" SMS. Trigger satisfaction survey. |
+  1488→| `payment.captured` | Update order payment status. |
+  1489→| `payment.refunded` | Update order status. Notify customer. |
+  1490→| `stock.updated` | Invalidate product cache. Update availability. |
+  1491→
+  1492→### 20.2 Payment Webhooks
+  1493→
+  1494→```
+  1495→POST /api/webhooks/payment
+  1496→X-Payment-Signature: sha256=abcdef...
+  1497→
+  1498→Payload: (provider-specific, normalized by BFF)
+  1499→```
+  1500→
+  1501→### 20.3 Webhook Security
+  1502→
+  1503→| Rule | Implementation |
+  1504→|---|---|
+  1505→| **Signature verification** | Every webhook must have a valid HMAC signature. Reject unsigned requests with `401`. |
+  1506→| **Idempotency** | Process each event exactly once using `event_id` deduplication. |
+  1507→| **Timeout** | Return `200` immediately. Process asynchronously via BullMQ. |
+  1508→| **No auth required** | Webhooks use signature-based auth, not session cookies. |
+  1509→| **Rate limited** | Stricter rate limits: 100 req/min per source IP. |
+  1510→
+  1511→---
+  1512→
+  1513→## 21. Rate Limiting
+  1514→
+  1515→### 21.1 Rate Limit Strategy
+  1516→
+  1517→Rate limits are enforced per-route-group using Redis counters.
+  1518→
+  1519→| Route Group | Window | Limit | Key | Response on Exceed |
+  1520→|---|---|---|---|---|
+  1521→| OTP request | 60s / 24h | 1/min, 5/day | `rl:otp:{phone}` | `429 SYSTEM_RATE_LIMITED` |
+  1522→| OTP verify | 5 min | 3 attempts | `rl:otp-verify:{phone}` | `429 AUTH_INVALID_OTP` (locked) |
+  1523→| Product browse | 1 min | 60 requests | `rl:browse:{ip}` | `429 SYSTEM_RATE_LIMITED` |
+  1524→| Cart operations | 1 min | 30 requests | `rl:cart:{session}` | `429 SYSTEM_RATE_LIMITED` |
+  1525→| Checkout | 1 min | 5 requests | `rl:checkout:{session}` | `429 SYSTEM_RATE_LIMITED` |
+  1526→| Search | 1 min | 30 requests | `rl:search:{ip}` | `429 SYSTEM_RATE_LIMITED` |
+  1527→| Admin operations | 1 min | 100 requests | `rl:admin:{user_id}` | `429 SYSTEM_RATE_LIMITED` |
+  1528→| Webhooks | 1 min | 100 requests | `rl:webhook:{ip}` | `429 SYSTEM_RATE_LIMITED` |
+  1529→
+  1530→### 21.2 Rate Limit Headers
+  1531→
+  1532→Every response includes rate limit headers:
+  1533→
+  1534→| Header | Description |
+  1535→|---|---|
+  1536→| `X-RateLimit-Limit` | Maximum requests in the window |
+  1537→| `X-RateLimit-Remaining` | Requests remaining in current window |
+  1538→| `X-RateLimit-Reset` | Unix timestamp when the window resets |
+  1539→
+  1540→### 21.3 Rate Limit Error Response
+  1541→
+  1542→```
+  1543→HTTP 429 Too Many Requests
+  1544→
+  1545→{
+  1546→  "error": {
+  1547→    "code": "SYSTEM_RATE_LIMITED",
+  1548→    "message": "Too many requests. Please wait a moment and try again.",
+  1549→    "messageAr": "طلبات كثيرة. انتظر لحظة ثم حاول مرة أخرى.",
+  1550→    "detail": {
+  1551→      "retryAfterSeconds": 45
+  1552→    }
+  1553→  },
+  1554→  "meta": { ... }
+  1555→}
+  1556→```
+  1557→
+  1558→---
+  1559→
+  1560→## 22. Caching Strategy
+  1561→
+  1562→### 22.1 Cache Layers
+  1563→
+  1564→```
+  1565→┌─────────────────────────────────────────────────────────┐
+  1566→│                    BROWSER CACHE                         │
+  1567→│   Cache-Control headers on static assets & ISR pages     │
+  1568→└──────────────────────────┬──────────────────────────────┘
+  1569→                           │
+  1570→┌──────────────────────────▼──────────────────────────────┐
+  1571→│                  NEXT.JS ISR CACHE                       │
+  1572→│   Static pages regenerated on schedule or on-demand      │
+  1573→└──────────────────────────┬──────────────────────────────┘
+  1574→                           │
+  1575→┌──────────────────────────▼──────────────────────────────┐
+  1576→│                  REDIS API CACHE                         │
+  1577→│   API response caching with TTL per resource type        │
+  1578→└──────────────────────────┬──────────────────────────────┘
+  1579→                           │
+  1580→┌──────────────────────────▼──────────────────────────────┐
+  1581→│                  MEDUSA / DATABASE                       │
+  1582→│   Source of truth. Always fresh for mutations.           │
+  1583→└─────────────────────────────────────────────────────────┘
+  1584→```
+  1585→
+  1586→### 22.2 Cache TTL by Resource
+  1587→
+  1588→| Resource | TTL | Cache Key | Invalidation Trigger |
+  1589→|---|---|---|---|
+  1590→| Product list | 5 min | `products:list:{hash(filters)}` | Product update, stock change, price change |
+  1591→| Product detail | 5 min | `products:detail:{id}` | Product update, variant change |
+  1592→| Category list | 30 min | `categories:list` | Category CRUD |
+  1593→| Delivery zones | 30 min | `delivery:zones` | Zone CRUD |
+  1594→| Delivery slots | 2 min | `delivery:slots:{zone_id}:{date}` | Slot booking, slot config change |
+  1595→| Cart | No cache | — | Always read from Medusa |
+  1596→| Orders | No cache | — | Always fresh |
+  1597→| Search results | 1 min | `search:{hash(query)}` | Product update |
+  1598→
+  1599→### 22.3 Cache Invalidation Rules
+  1600→
+  1601→| Rule | Implementation |
+  1602→|---|---|
+  1603→| **Write-through** | Any mutation (POST, PATCH, DELETE) invalidates related cache keys. |
+  1604→| **Tag-based invalidation** | Cache entries are tagged: `products`, `categories`, `zones`. Invalidate by tag. |
+  1605→| **Webhook-triggered** | Medusa `stock.updated` event invalidates product caches. |
+  1606→| **Manual invalidation** | Admin can trigger `POST /api/admin/v1/cache/invalidate` with tag parameter. |
+  1607→| **Never cache auth** | OTP, session, and auth endpoints are never cached. |
+  1608→
+  1609→### 22.4 Cache Headers for Browser
+  1610→
+  1611→| Resource | Cache-Control |
+  1612→|---|---|
+  1613→| Static assets (images, fonts) | `public, max-age=31536000, immutable` |
+  1614→| ISR pages (product pages) | `public, s-maxage=300, stale-while-revalidate=60` |
+  1615→| API responses | `private, no-cache` (Redis handles server-side caching) |
+  1616→| API error responses | `no-store` |
+  1617→
+  1618→---
+  1619→
+  1620→## 23. Localization & RTL in API
+  1621→
+  1622→### 23.1 Bilingual Field Convention
+  1623→
+  1624→Every user-facing text in API responses includes both languages:
+  1625→
+  1626→```
+  1627→{
+  1628→  "nameEn": "Egyptian Rice",
+  1629→  "nameAr": "أرز مصري"
+  1630→}
+  1631→```
+  1632→
+  1633→The frontend selects the appropriate field based on the current locale. The API **never** decides which language to return.
+  1634→
+  1635→### 23.2 Why Both Fields, Always
+  1636→
+  1637→| Approach | Problem |
+  1638→|---|---|
+  1639→| Server-side locale switching | Requires two API calls for bilingual comparison. Breaks caching (different cache per locale). |
+  1640→| Client-side language selection | One response serves both languages. Cache hit rate is higher. |
+  1641→| Single field with language toggle | Elder users switching between languages lose their page state. |
+  1642→
+  1643→### 23.3 Accept-Language Header
+  1644→
+  1645→The `Accept-Language` header is used for **default** values only — when a field is missing an Arabic translation, the API falls back to English. It never changes the response structure.
+  1646→
+  1647→| Header Value | Behavior |
+  1648→|---|---|
+  1649→| `ar` | If `nameAr` is null, fall back to `nameEn` in the `nameAr` field. |
+  1650→| `en` | If `nameEn` is null, fall back to `nameAr` in the `nameEn` field. |
+  1651→| Missing | Treat as `ar` (Egyptian market default). |
+  1652→
+  1653→### 23.4 Number Formatting
+  1654→
+  1655→The API returns raw numbers. The frontend formats:
+  1656→
+  1657→| Data | API Returns | Frontend Renders (AR) | Frontend Renders (EN) |
+  1658→|---|---|---|---|
+  1659→| Price | `27500` (piastres) | `٢٧٥٫٠٠ ج.م` | `EGP 275.00` |
+  1660→| Quantity | `5` | `٥` | `5` |
+  1661→| Phone | `+201012345678` | `+20 101 234 5678` | `+20 101 234 5678` |
+  1662→| Date | `2025-01-15T10:30:00Z` | `١٥ يناير ٢٠٢٥` | `Jan 15, 2025` |
+  1663→| Time | `2025-01-15T10:30:00Z` | `١٠:٣٠ ص` | `10:30 AM` |
+  1664→
+  1665→---
+  1666→
+  1667→## 24. Elder-Friendly API Design
+  1668→
+  1669→These rules exist specifically because GGH serves Egyptian households where the primary user may be Om Ibrahim — a 60-year-old woman using a phone on a 3G connection.
+  1670→
+  1671→### 24.1 Payload Minimization
+  1672→
+  1673→| Rule | Why |
+  1674→|---|---|
+  1675→| Product list returns only: id, names, thumbnail, price range, in stock | A list of 20 products with full detail is 200KB+ vs 20KB. On 3G, that's 2 seconds vs 20 seconds. |
+  1676→| Product detail is a separate request | Only fetch when the user taps. |
+  1677→| Cart summary, not full items, for header badge | Don't re-fetch the entire cart to show "3 items". |
+  1678→| Image URLs, not base64 | Let the browser cache images natively. |
+  1679→
+  1680→### 24.2 Tolerance for User Mistakes
+  1681→
+  1682→| Rule | Implementation |
+  1683→|---|---|
+  1684→| **Auto-correct phone format** | `01012345678` → `+201012345678`. `00201012345678` → `+201012345678`. Don't reject; fix. |
+  1685→| **Trim whitespace** | All string inputs are trimmed before validation. |
+  1686→| **Quantity capping, not rejection** | If user requests 500 but only 340 available, offer 340 instead of erroring. |
+  1687→| **Cart recovery** | Guest carts persist for 7 days. If the user closes the browser and returns, their cart is still there. |
+  1688→| **Double-submit protection** | `X-Idempotency-Key` header prevents duplicate orders from accidental double-taps. |
+  1689→| **Graceful degradation** | If ERP is down, show cached product data with a "prices may vary" notice. Don't show an error page. |
+  1690→
+  1691→### 24.3 Clear Status Communication
+  1692→
+  1693→Every order status has both a machine code and human labels:
+  1694→
+  1695→| Status Code | Label EN | Label AR | Description |
+  1696→|---|---|---|---|
+  1697→| `pending` | Order Placed | تم تأكيد الطلب | Waiting for confirmation |
+  1698→| `confirmed` | Confirmed | تم التأكيد | Store confirmed availability |
+  1699→| `preparing` | Being Prepared | جاري التحضير | Items being packed |
+  1700→| `out_for_delivery` | On the Way | في الطريق | Driver is heading to you |
+  1701→| `delivered` | Delivered | تم التوصيل | Order delivered successfully |
+  1702→| `cancelled` | Cancelled | تم الإلغاء | Order was cancelled |
+  1703→| `returned` | Returned | تم الاسترجاع | Order was returned |
+  1704→
+  1705→---
+  1706→
+  1707→## 25. WebSocket Events
+  1708→
+  1709→GGH uses Socket.io for real-time updates. WebSocket connections go through the same BFF.
+  1710→
+  1711→### 25.1 Connection
+  1712→
+  1713→```
+  1714→Client connects:
+  1715→  io("/?XTransformPort=3003")
+  1716→
+  1717→Authentication:
+  1718→  Send session cookie on handshake.
+  1719→  Server validates JWT and joins user to their room.
+  1720→```
+  1721→
+  1722→### 25.2 Event Catalog
+  1723→
+  1724→| Event | Direction | Room | Payload |
+  1725→|---|---|---|---|
+  1726→| `order:status_updated` | Server → Client | `customer:{customerId}` | `{ orderId, status, statusLabelEn, statusLabelAr, timestamp }` |
+  1727→| `delivery:eta_updated` | Server → Client | `customer:{customerId}` | `{ orderId, eta, driverName, driverPhone }` |
+  1728→| `stock:changed` | Server → Client | `product:{productId}` | `{ variantId, inStock, stockQuantity }` |
+  1729→| `admin:order_new` | Server → Client | `admin:orders` | `{ orderId, customerName, totalAmount }` |
+  1730→| `admin:sync_completed` | Server → Client | `admin:system` | `{ jobId, status, recordCount }` |
+  1731→
+  1732→### 25.3 WebSocket Rules
+  1733→
+  1734→| Rule | Convention |
+  1735→|---|---|
+  1736→| Never send sensitive data | No phone numbers, no addresses in WebSocket events. Use IDs and fetch detail via REST. |
+  1737→| Reconnect with backoff | Client reconnects with exponential backoff: 1s, 2s, 4s, 8s, max 30s. |
+  1738→| Missed events recovery | On reconnect, client fetches current state via REST. WebSocket is supplemental, not primary. |
+  1739→| No WebSocket-only features | Every real-time feature has a REST fallback. |
+  1740→
+  1741→---
+  1742→
+  1743→## 26. API Changelog Convention
+  1744→
+  1745→### 26.1 Change Categories
+  1746→
+  1747→| Category | Description | Version Impact |
+  1748→|---|---|---|
+  1749→| **Added** | New endpoint, new optional field, new filter | No version bump |
+  1750→| **Changed** | Field type change, field renamed, behavior change | Version bump |
+  1751→| **Deprecated** | Field or endpoint marked for removal | No version bump, 6-month sunset |
+  1752→| **Removed** | Field or endpoint deleted | Version bump |
+  1753→| **Fixed** | Bug fix that doesn't change contract | No version bump |
+  1754→
+  1755→### 26.2 Changelog Format
+  1756→
+  1757→Every API change is recorded in `docs/api-changelog.md`:
+  1758→
+  1759→```
+  1760→## 2025-01-15
+  1761→
+  1762→### Added
+  1763→- `GET /api/v1/search` — Full-text search endpoint
+  1764→- `relatedProducts` field on product detail response
+  1765→
+  1766→### Changed
+  1767→- `priceAmount` on variant is now always present (previously null for some case packs)
+  1768→  → Migrate before upgrading to v2
+  1769→
+  1770→### Fixed
+  1771→- `GET /api/v1/cart` now correctly calculates delivery fee for edge-case zones
+  1772→```
+  1773→
+  1774→### 26.3 Breaking Change Policy
+  1775→
+  1776→| Policy | Rule |
+  1777→|---|---|
+  1778→| **Announce early** | Breaking changes are announced 6 months before activation. |
+  1779→| **Coexist** | Old and new versions run simultaneously during migration. |
+  1780→| **Sunset notice** | Deprecated endpoints return `Warning: 299 - "Deprecated: see /docs/api-changelog"` header. |
+  1781→| **No silent breaks** | A field never changes meaning without a version bump. Adding a new field is never breaking. |
+  1782→
+  1783→---
+  1784→
+  1785→> **Next document:** `08_StateManagement.md` — Client state architecture, server state patterns, caching boundaries, and Zustand + TanStack Query conventions.
+  1786→

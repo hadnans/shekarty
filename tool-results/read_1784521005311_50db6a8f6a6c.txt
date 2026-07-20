@@ -1,0 +1,1402 @@
+     1→# 08 — Authentication
+     2→
+     3→> **GGH — Gomla Go Home** — Login, registration, OTP flow, JWT structure, roles, permissions, session management, and security. The trust layer of the platform.
+     4→
+     5→---
+     6→
+     7→## Table of Contents
+     8→
+     9→1. [Authentication Philosophy](#1-authentication-philosophy)
+    10→2. [Architecture Overview](#2-architecture-overview)
+    11→3. [Identity Model](#3-identity-model)
+    12→4. [Registration Flow](#4-registration-flow)
+    13→5. [Login Flow — OTP](#5-login-flow--otp)
+    14→6. [OTP Deep Dive](#6-otp-deep-dive)
+    15→7. [Admin Authentication](#7-admin-authentication)
+    16→8. [JWT Structure & Signing](#8-jwt-structure--signing)
+    17→9. [Session Management](#9-session-management)
+    18→10. [Role System](#10-role-system)
+    19→11. [Permission System](#11-permission-system)
+    20→12. [Guest Experience](#12-guest-experience)
+    21→13. [Cart Merge on Login](#13-cart-merge-on-login)
+    22→14. [Token Lifecycle](#14-token-lifecycle)
+    23→15. [Security Measures](#15-security-measures)
+    24→16. [Rate Limiting for Auth](#16-rate-limiting-for-auth)
+    25→17. [Device & Session Tracking](#17-device--session-tracking)
+    26→18. [Passwordless Philosophy — Why No Passwords](#18-passwordless-philosophy--why-no-passwords)
+    27→19. [Account Recovery](#19-account-recovery)
+    28→20. [Elder-Friendly Auth UX](#20-elder-friendly-auth-ux)
+    29→21. [RTL & Bilingual in Auth](#21-rtl--bilingual-in-auth)
+    30→22. [Authentication Error Codes](#22-authentication-error-codes)
+    31→23. [Medusa Auth Integration](#23-medusa-auth-integration)
+    32→24. [Future: Multi-Factor & Biometric](#24-future-multi-factor--biometric)
+    33→
+    34→---
+    35→
+    36→## 1. Authentication Philosophy
+    37→
+    38→| Principle | Rule | Why |
+    39→|---|---|---|
+    40→| **Phone is identity** | Every user is identified by their Egyptian mobile number. No email required. No username required. | Om Ibrahim has a phone number, not an email address. Phone numbers are universal in Egypt (100M+ mobile subscribers). |
+    41→| **OTP, not passwords** | Authentication is via one-time SMS code. No passwords. No "forgot password" flows. | Passwords are forgotten, reused, and phished. OTP removes all three problems. 4 digits are easier than a password for elder users. |
+    42→| **Login = Registration** | If a phone number is new, the account is created automatically during OTP verification. No separate signup form. | Reduce friction. Om Ibrahim taps her phone number, receives a code, and she's in — whether it's her first visit or her hundredth. |
+    43→| **Session over token-in-header** | JWT is stored in an HttpOnly cookie, not in localStorage or a header. | XSS cannot steal an HttpOnly cookie. No token management code on the frontend. |
+    44→| **Separate admin sessions** | Customer auth and admin auth use different cookies, different expiry, different rate limits. | An admin's compromised session must not expose customer data. A customer session can never escalate to admin. |
+    45→| **Graceful, not punitive** | Auth errors guide the user forward, never block them in a dead end. | "The code you entered is incorrect. Please try again." ≠ "Authentication failed. Error 401." |
+    46→
+    47→---
+    48→
+    49→## 2. Architecture Overview
+    50→
+    51→```
+    52→┌─────────────────────────────────────────────────────────────────────┐
+    53→│                         AUTHENTICATION FLOW                          │
+    54→│                                                                     │
+    55→│   ┌───────────┐    ┌───────────────┐    ┌──────────┐    ┌───────┐  │
+    56→│   │  Browser  │    │   Next.js BFF │    │  Medusa  │    │ SMS   │  │
+    57→│   │           │    │   (Auth Layer) │    │  v2      │    │ Gateway│  │
+    58→│   └─────┬─────┘    └──────┬────────┘    └────┬─────┘    └───┬───┘  │
+    59→│         │                 │                   │              │      │
+    60→│         │  1. Enter phone │                   │              │      │
+    61→│         │────────────────→│                   │              │      │
+    62→│         │                 │  2. Generate OTP  │              │      │
+    63→│         │                 │  Store in Redis   │              │      │
+    64→│         │                 │──────────────────────────────────→│      │
+    65→│         │                 │                   │       3. SMS  │      │
+    66→│         │                 │                   │        with   │      │
+    67→│         │                 │  4. "Code sent"   │        code   │      │
+    68→│         │←────────────────│                   │              │      │
+    69→│         │                 │                   │              │      │
+    70→│         │  5. Enter code  │                   │              │      │
+    71→│         │────────────────→│                   │              │      │
+    72→│         │                 │  6. Verify OTP    │              │      │
+    73→│         │                 │  against Redis    │              │      │
+    74→│         │                 │                   │              │      │
+    75→│         │                 │  7. Find/create   │              │      │
+    76→│         │                 │  customer in      │              │      │
+    77→│         │                 │  Medusa           │              │      │
+    78→│         │                 │──────────────────→│              │      │
+    79→│         │                 │                   │              │      │
+    80→│         │                 │  8. Customer data │              │      │
+    81→│         │                 │←──────────────────│              │      │
+    82→│         │                 │                   │              │      │
+    83→│         │                 │  9. Sign JWT      │              │      │
+    84→│         │                 │  Set HttpOnly     │              │      │
+    85→│         │                 │  cookie           │              │      │
+    86→│         │  10. Session    │                   │              │      │
+    87→│         │  cookie set     │                   │              │      │
+    88→│         │←────────────────│                   │              │      │
+    89→│         │                 │                   │              │      │
+    90→│         │  11. Authenticated request          │              │      │
+    91→│         │  (cookie sent    │                   │              │      │
+    92→│         │   automatically) │                   │              │      │
+    93→│         │────────────────→│  12. Validate JWT │              │      │
+    94→│         │                 │  Forward to Medusa│              │      │
+    95→│         │                 │──────────────────→│              │      │
+    96→└─────────────────────────────────────────────────────────────────────┘
+    97→```
+    98→
+    99→### Component Responsibilities
+   100→
+   101→| Component | Responsibility |
+   102→|---|---|
+   103→| **Browser** | Collect phone number and OTP code. Send cookie on every request. No token logic. |
+   104→| **Next.js BFF** | Generate OTP. Store in Redis. Verify OTP. Sign JWT. Set cookie. Validate cookie on every request. Forward auth to Medusa. |
+   105→| **Redis** | Store OTP codes with TTL. Store session metadata. Rate limit counters. |
+   106→| **Medusa v2** | Customer record storage. Customer group assignment. Order and cart association. |
+   107→| **SMS Gateway** | Deliver OTP SMS. Provider-agnostic (Twilio, Vonage, or Egyptian provider like Connek). |
+   108→
+   109→---
+   110→
+   111→## 3. Identity Model
+   112→
+   113→### 3.1 The Single Identity: Phone Number
+   114→
+   115→GGH uses a single identifier for every user: their Egyptian mobile number.
+   116→
+   117→```
+   118→Accepted formats (auto-corrected to E.164):
+   119→  01012345678        →  +201012345678
+   120→  201012345678       →  +201012345678
+   121→  00201012345678     →  +201012345678
+   122→  +201012345678      →  +201012345678  (canonical)
+   123→```
+   124→
+   125→### 3.2 Phone Number Rules
+   126→
+   127→| Rule | Constraint | Why |
+   128→|---|---|---|
+   129→| Egyptian numbers only | Must match `+20(10|11|12|15)\d{8}` | GGH operates in Egypt. International numbers are not supported in v1. |
+   130→| One account per phone | Each phone number maps to exactly one customer record. | No ambiguity. Om Ibrahim doesn't need to remember "which account did I use?" |
+   131→| Phone cannot be changed | Once registered, the phone number is immutable. | Prevents account hijacking via phone number change. |
+   132→| No email required | Email is an optional profile field, never used for auth. | Elder users may not have email. |
+   133→
+   134→### 3.3 Customer Record in Medusa
+   135→
+   136→When a phone number is verified for the first time, the BFF creates a customer record in Medusa:
+   137→
+   138→| Field | Value on Creation | Notes |
+   139→|---|---|---|
+   140→| `id` | Auto-generated (`cus_01...`) | Medusa ID format |
+   141→| `phone` | `+201012345678` | E.164 format |
+   142→| `email` | `+201012345678@ggh.local` | Placeholder email (Medusa requires one). Not deliverable. |
+   143→| `first_name` | Empty string | User fills in later via profile |
+   144→| `last_name` | Empty string | User fills in later via profile |
+   145→| `metadata.name_ar` | Empty string | Arabic display name |
+   146→| `metadata.preferred_locale` | `"ar"` | Default to Arabic for Egyptian market |
+   147→| `metadata.wholesale_status` | `"retail"` | Default customer group |
+   148→| `groups` | `["retail"]` | Assigned to retail customer group |
+   149→
+   150→---
+   151→
+   152→## 4. Registration Flow
+   153→
+   154→### 4.1 Registration IS Login
+   155→
+   156→There is no separate registration page. The flow is identical whether the phone number is new or existing:
+   157→
+   158→```
+   159→┌──────────────────────────────────────────────────────────────────┐
+   160→│                                                                  │
+   161→│   User enters phone number                                       │
+   162→│          │                                                       │
+   163→│          ▼                                                       │
+   164→│   OTP sent to phone                                              │
+   165→│          │                                                       │
+   166→│          ▼                                                       │
+   167→│   User enters OTP code                                           │
+   168→│          │                                                       │
+   169→│          ├── Phone exists in Medusa?                             │
+   170→│          │       │                                               │
+   171→│          │       ├── YES → Create session for existing customer  │
+   172→│          │       │                                               │
+   173→│          │       └── NO  → Create customer + Create session     │
+   174→│          │                    │                                   │
+   175→│          │                    └── Return { is_new: true }        │
+   176→│          │                                                       │
+   177→│          ▼                                                       │
+   178→│   User is authenticated                                          │
+   179→│                                                                  │
+   180→└──────────────────────────────────────────────────────────────────┘
+   181→```
+   182→
+   183→### 4.2 New Customer Onboarding
+   184→
+   185→When `is_new: true` is returned, the frontend shows a brief welcome screen:
+   186→
+   187→| Step | Screen | Action | Elder-Friendly Notes |
+   188→|---|---|---|---|
+   189→| 1 | Welcome | "Welcome to GGH! / أهلاً بكم في جملة لحد البيت" | Large text, single button: "Let's start / يلا نبدأ" |
+   190→| 2 | Name (optional) | "What should we call you? / إيه اسمك؟" | Optional. Can skip. Large input field. |
+   191→| 3 | Delivery area | "Where do you want your delivery? / التوصيل فين؟" | Zone picker with large cards. |
+   192→| 4 | Done | Redirect to home page | No tutorial, no carousel. Just the shop. |
+   193→
+   194→The onboarding is **3 taps maximum**. Every step is skippable except the phone verification that already happened.
+   195→
+   196→---
+   197→
+   198→## 5. Login Flow — OTP
+   199→
+   200→### 5.1 Step-by-Step
+   201→
+   202→```
+   203→Step 1:  User opens GGH → Login screen shown (if not authenticated)
+   204→         ┌─────────────────────────────────────┐
+   205→         │                                     │
+   206→         │     أهلاً بكم في جملة لحد البيت     │
+   207→         │     Welcome to GGH                  │
+   208→         │                                     │
+   209→         │     ┌─────────────────────────────┐ │
+   210→         │     │  +20 | 01XXXXXXXXX          │ │   ← Large input (48px+)
+   211→         │     └─────────────────────────────┘ │
+   212→         │                                     │
+   213→         │     ┌─────────────────────────────┐ │
+   214→         │     │   أرسل الكود  Send Code     │ │   ← Full-width button (56px)
+   215→         │     └─────────────────────────────┘ │
+   216→         │                                     │
+   217→         └─────────────────────────────────────┘
+   218→
+   219→Step 2:  SMS arrives → OTP entry screen
+   220→         ┌─────────────────────────────────────┐
+   221→         │                                     │
+   222→         │     أدخل الكود  Enter the code      │
+   223→         │                                     │
+   224→         │     ┌───┐ ┌───┐ ┌───┐ ┌───┐       │   ← 4 large digit boxes
+   225→         │     │ 1 │ │ 2 │ │ 3 │ │ 4 │       │      (56px × 56px each)
+   226→         │     └───┘ └───┘ └───┘ └───┘       │
+   227→         │                                     │
+   228→         │     إعادة الإرسال في ٤٥ ثانية       │   ← Countdown timer
+   229→         │     Resend in 45s                   │
+   230→         │                                     │
+   231→         │     ┌─────────────────────────────┐ │
+   232→         │     │   تأكيد  Confirm             │ │   ← Full-width button
+   233→         │     └─────────────────────────────┘ │
+   234→         │                                     │
+   235→         └─────────────────────────────────────┘
+   236→
+   237→Step 3:  Code verified → Redirect to home (existing) or onboarding (new)
+   238→```
+   239→
+   240→### 5.2 Login Flow — Technical Sequence
+   241→
+   242→```
+   243→Browser                     BFF                         Redis              Medusa           SMS
+   244→  │                          │                            │                  │               │
+   245→  │  POST /auth/otp/request  │                            │                  │               │
+   246→  │  { phone: "+20101..." }  │                            │                  │               │
+   247→  │─────────────────────────→│                            │                  │               │
+   248→  │                          │  Generate 4-digit OTP      │                  │               │
+   249→  │                          │  otp = "1234"              │                  │               │
+   250→  │                          │                            │                  │               │
+   251→  │                          │  SET otp:+20101...         │                  │               │
+   252→  │                          │    = "1234"                │                  │               │
+   253→  │                          │  EX 300 (5 min)            │                  │               │
+   254→  │                          │───────────────────────────→│                  │               │
+   255→  │                          │                            │                  │               │
+   256→  │                          │  Increment rate limit      │                  │               │
+   257→  │                          │  INCR rl:otp:+20101...     │                  │               │
+   258→  │                          │───────────────────────────→│                  │               │
+   259→  │                          │                            │                  │               │
+   260→  │                          │  Send SMS via gateway      │                  │               │
+   261→  │                          │──────────────────────────────────────────────────────────────→│
+   262→  │                          │                            │                  │               │
+   263→  │  { expires_in: 300 }     │                            │                  │               │
+   264→  │←─────────────────────────│                            │                  │               │
+   265→  │                          │                            │                  │               │
+   266→  │  POST /auth/otp/verify   │                            │                  │               │
+   267→  │  { phone, code: "1234" } │                            │                  │               │
+   268→  │─────────────────────────→│                            │                  │               │
+   269→  │                          │  GET otp:+20101...         │                  │               │
+   270→  │                          │───────────────────────────→│                  │               │
+   271→  │                          │  "1234"                    │                  │               │
+   272→  │                          │←───────────────────────────│                  │               │
+   273→  │                          │                            │                  │               │
+   274→  │                          │  Compare codes             │                  │               │
+   275→  │                          │  Match? ✓                  │                  │               │
+   276→  │                          │                            │                  │               │
+   277→  │                          │  DEL otp:+20101...         │                  │               │
+   278→  │                          │───────────────────────────→│                  │               │
+   279→  │                          │                            │                  │               │
+   280→  │                          │  Find customer by phone    │                  │               │
+   281→  │                          │──────────────────────────────────────────────→│               │
+   282→  │                          │                            │  { customer }    │               │
+   283→  │                          │←─────────────────────────────────────────────│               │
+   284→  │                          │                            │                  │               │
+   285→  │                          │  (If not found: create)    │                  │               │
+   286→  │                          │──────────────────────────────────────────────→│               │
+   287→  │                          │                            │                  │               │
+   288→  │                          │  Sign JWT                  │                  │               │
+   289→  │                          │  Set-Cookie: ggh_session   │                  │               │
+   290→  │                          │                            │                  │               │
+   291→  │  200 + Cookie + { customer, is_new }                  │                  │               │
+   292→  │←─────────────────────────│                            │                  │               │
+   293→```
+   294→
+   295→---
+   296→
+   297→## 6. OTP Deep Dive
+   298→
+   299→### 6.1 OTP Generation
+   300→
+   301→| Property | Value | Why |
+   302→|---|---|---|
+   303→| Length | 4 digits | Elder-friendly. 6 digits is harder to read and type. 4 digits = 10,000 combinations. |
+   304→| Character set | `0123456789` | Digits only. No letters (confusing in Arabic/English mix). No l/I/O/0 ambiguity. |
+   305→| Generation | Cryptographically secure random (`crypto.randomInt(0, 10000)`) | No predictable sequences. |
+   306→| Format | Zero-padded: `0047`, `1234`, `9999` | Consistent 4-digit display. |
+   307→| No sequential codes | Reject codes where all digits are the same: `0000`, `1111`, ..., `9999` | Reduce misread risk. Also the most common brute-force attempts. |
+   308→| No ascending/descending | Reject `1234`, `4321`, `9876` | Easy to guess. Elder users might type these by accident. |
+   309→
+   310→### 6.2 OTP Storage in Redis
+   311→
+   312→```
+   313→Key:     otp:{phone}
+   314→Value:   JSON { "code": "4827", "attempts": 0, "created_at": 1700000000 }
+   315→TTL:     300 seconds (5 minutes)
+   316→```
+   317→
+   318→| Field | Purpose |
+   319→|---|---|
+   320→| `code` | The OTP to verify against |
+   321→| `attempts` | Number of failed verification attempts (max 3) |
+   322→| `created_at` | Timestamp for audit logging |
+   323→
+   324→### 6.3 OTP Verification Logic
+   325→
+   326→```
+   327→FUNCTION verify_otp(phone, submitted_code):
+   328→
+   329→  record = Redis.GET("otp:{phone}")
+   330→
+   331→  IF record is null:
+   332→    return ERROR(AUTH_OTP_EXPIRED)
+   333→
+   334→  IF record.attempts >= 3:
+   335→    Redis.DEL("otp:{phone}")
+   336→    return ERROR(AUTH_OTP_LOCKED)
+   337→
+   338→  IF record.code ≠ submitted_code:
+   339→    record.attempts += 1
+   340→    Redis.SET("otp:{phone}", record, keep TTL)
+   341→    remaining = 3 - record.attempts
+   342→    return ERROR(AUTH_INVALID_OTP, { remaining_attempts: remaining })
+   343→
+   344→  // Code matches
+   345→  Redis.DEL("otp:{phone}")          // Consume the OTP
+   346→  Redis.DEL("rl:otp-verify:{phone}") // Clear verify rate limit
+   347→  return SUCCESS()
+   348→```
+   349→
+   350→### 6.4 OTP Rate Limits
+   351→
+   352→| Limit | Window | Max | Redis Key | Purpose |
+   353→|---|---|---|---|---|
+   354→| OTP request per phone | 60 seconds | 1 request | `rl:otp:{phone}` | Prevent rapid-fire SMS |
+   355→| OTP request per phone per day | 24 hours | 5 requests | `rl:otp-daily:{phone}` | Limit SMS cost |
+   356→| OTP verify attempts | Per OTP lifetime | 3 attempts | Stored in OTP record | Prevent brute force |
+   357→| OTP request per IP | 1 hour | 10 requests | `rl:otp-ip:{ip}` | Prevent scripted abuse |
+   358→| Global OTP per IP | 24 hours | 30 requests | `rl:otp-ip-daily:{ip}` | Rate limit SMS gateway |
+   359→
+   360→### 6.5 SMS Message Format
+   361→
+   362→The SMS message is bilingual and concise:
+   363→
+   364→```
+   365→GGH code: 4827
+   366→كود جملة لحد البيت: ٤٨٢٧
+   367→
+   368→Do not share this code.
+   369→ماتشارش الكود ده مع حد.
+   370→```
+   371→
+   372→| Rule | Why |
+   373→|---|---|
+   374→| Code first, in both languages | User sees the code in the notification preview without opening the SMS |
+   375→| Arabic-Indic numerals in Arabic line | Consistency with RTL reading |
+   376→| Warning against sharing | Phishing prevention |
+   377→| No links in SMS | Prevent SMS phishing attacks |
+   378→
+   379→### 6.6 SMS Provider Abstraction
+   380→
+   381→GGH does not depend on a specific SMS provider. The BFF uses an abstraction layer:
+   382→
+   383→```
+   384→┌──────────────────────────────────────┐
+   385→│         SMS Provider Interface       │
+   386→│                                      │
+   387→│  sendOtp(phone: string, code: string)│
+   388→│    → Promise<{ success: boolean }>   │
+   389→│                                      │
+   390→└───────────┬──────────────────────────┘
+   391→            │
+   392→   ┌────────┼────────────┐
+   393→   │        │            │
+   394→   ▼        ▼            ▼
+   395→┌──────┐ ┌──────┐  ┌──────────┐
+   396→│Twilio│ │Vonage│  │Connek    │
+   397→│      │ │      │  │(Egypt)   │
+   398→└──────┘ └──────┘  └──────────┘
+   399→```
+   400→
+   401→Provider selection is via environment variable `SMS_PROVIDER`. Fallback chain is configurable: if primary provider fails, try secondary.
+   402→
+   403→---
+   404→
+   405→## 7. Admin Authentication
+   406→
+   407→### 7.1 Admin Login Method
+   408→
+   409→Admins use **email + password**, not OTP. Why?
+   410→
+   411→| Reason | Detail |
+   412→|---|---|
+   413→| Admins are internal staff | They have company email addresses and are trained |
+   414→| Stronger authentication needed | Admin access affects all customers, orders, and pricing |
+   415→| Fewer admins | The cost of password management is acceptable for a small team |
+   416→| Audit trail | Email-based login provides a clear audit chain |
+   417→
+   418→### 7.2 Admin Login Flow
+   419→
+   420→```
+   421→Step 1:  POST /api/admin/v1/auth/login
+   422→         { "email": "admin@ggh.eg", "password": "..." }
+   423→
+   424→Step 2:  BFF validates credentials against Medusa Admin API
+   425→
+   426→Step 3:  On success:
+   427→         - Sign admin JWT with admin-specific secret
+   428→         - Set-Cookie: ggh_admin_session
+   429→         - Different cookie name, different secret, different expiry
+   430→
+   431→Step 4:  On failure:
+   432→         - Return AUTH_INVALID_CREDENTIALS
+   433→         - Increment rate limit counter
+   434→         - After 5 failed attempts: lock account for 15 minutes
+   435→```
+   436→
+   437→### 7.3 Admin vs. Customer Session Isolation
+   438→
+   439→| Property | Customer Session | Admin Session |
+   440→|---|---|---|
+   441→| Cookie name | `ggh_session` | `ggh_admin_session` |
+   442→| JWT secret | `JWT_CUSTOMER_SECRET` | `JWT_ADMIN_SECRET` |
+   443→| Max age | 24 hours | 8 hours |
+   444→| Idle timeout | None (absolute expiry only) | 2 hours of inactivity |
+   445→| Role in JWT | `"customer"` | `"admin"` |
+   446→| Storage | HttpOnly, Secure, SameSite=Strict | HttpOnly, Secure, SameSite=Strict |
+   447→| Can coexist? | Yes — a user can be logged in as both customer and admin simultaneously in the same browser | Yes — cookies are independent |
+   448→| Medusa API | Store API tokens | Admin API tokens |
+   449→
+   450→### 7.4 Admin Password Requirements
+   451→
+   452→| Rule | Value |
+   453→|---|---|
+   454→| Minimum length | 12 characters |
+   455→| Must contain | Uppercase, lowercase, digit, special character |
+   456→| No dictionary words | Checked against common password list |
+   457→| Forced rotation | Every 90 days |
+   458→| History | Cannot reuse last 6 passwords |
+   459→| Breach check | Checked against HaveIBeenPwned API (hashed lookup) |
+   460→
+   461→---
+   462→
+   463→## 8. JWT Structure & Signing
+   464→
+   465→### 8.1 JWT Header
+   466→
+   467→```
+   468→{
+   469→  "alg": "HS256",
+   470→  "typ": "JWT"
+   471→}
+   472→```
+   473→
+   474→| Decision | Choice | Why |
+   475→|---|---|---|
+   476→| Algorithm | HMAC-SHA256 (`HS256`) | Symmetric. Fast. No key management complexity. RS256 adds overhead with no benefit for same-origin cookies. |
+   477→| Not RS256 | No public/private key pair needed | We sign and verify on the same server. RS256 is for distributed signing. |
+   478→
+   479→### 8.2 Customer JWT Payload
+   480→
+   481→```
+   482→{
+   483→  "sub": "cus_01ABC123",              // Medusa customer ID
+   484→  "phone": "+201012345678",           // Verified phone number
+   485→  "role": "customer",                 // Fixed role
+   486→  "groups": ["retail"],               // Medusa customer groups
+   487→  "zone_id": "zone_01DEF456",         // Default delivery zone (nullable)
+   488→  "locale": "ar",                     // Preferred locale
+   489→  "is_wholesale": false,              // Convenience flag
+   490→  "iat": 1700000000,                  // Issued at
+   491→  "exp": 1700086400,                  // Expires at (24h from iat)
+   492→  "jti": "sess_a1b2c3d4"             // Session ID for revocation
+   493→}
+   494→```
+   495→
+   496→### 8.3 Admin JWT Payload
+   497→
+   498→```
+   499→{
+   500→  "sub": "admin_01XYZ789",            // Internal admin ID
+   501→  "email": "admin@ggh.eg",           // Admin email
+   502→  "role": "admin",                    // Fixed role
+   503→  "permissions": [                    // Granted permissions
+   504→    "products:read", "products:write",
+   505→    "orders:read", "orders:write",
+   506→    "delivery:manage"
+   507→  ],
+   508→  "iat": 1700000000,
+   509→  "exp": 1700028800,                  // 8 hours from iat
+   510→  "jti": "sess_admin_e5f6g7h8"
+   511→}
+   512→```
+   513→
+   514→### 8.4 Driver JWT Payload
+   515→
+   516→```
+   517→{
+   518→  "sub": "drv_01QRS456",              // Driver ID
+   519→  "phone": "+201098765432",           // Driver phone
+   520→  "role": "driver",                   // Fixed role
+   521→  "zone_ids": ["zone_01DEF456"],      // Assigned delivery zones
+   522→  "iat": 1700000000,
+   523→  "exp": 1700050800,                  // 14 hours (full shift)
+   524→  "jti": "sess_drv_i9j0k1l2"
+   525→}
+   526→```
+   527→
+   528→### 8.5 JWT Signing Rules
+   529→
+   530→| Rule | Implementation |
+   531→|---|---|
+   532→| **Separate secrets per role** | `JWT_CUSTOMER_SECRET`, `JWT_ADMIN_SECRET`, `JWT_DRIVER_SECRET` — a compromised customer secret cannot forge admin tokens |
+   533→| **Secret length** | 256 bits (32 bytes), base64-encoded | Minimum for HS256 |
+   534→| **Secret rotation** | Support multiple active secrets via array. Old secret remains valid for 24h after rotation. | Zero-downtime rotation. |
+   535→| **No sensitive data in payload** | Never put addresses, payment info, or full names in JWT | JWT is signed, not encrypted. Anyone with the token can read it. |
+   536→| **`jti` for revocation** | Every session has a unique `jti`. Stored in Redis for revocation lookup. | Allows targeted session invalidation without clearing all sessions. |
+   537→
+   538→---
+   539→
+   540→## 9. Session Management
+   541→
+   542→### 9.1 Cookie Configuration
+   543→
+   544→| Property | Customer | Admin | Driver |
+   545→|---|---|---|---|
+   546→| Name | `ggh_session` | `ggh_admin_session` | `ggh_driver_session` |
+   547→| Domain | Current domain | Current domain | Current domain |
+   548→| Path | `/` | `/api/admin/` | `/api/driver/` |
+   549→| HttpOnly | `true` | `true` | `true` |
+   550→| Secure | `true` | `true` | `true` |
+   551→| SameSite | `Strict` | `Strict` | `Strict` |
+   552→| Max-Age | `86400` (24h) | `28800` (8h) | `50400` (14h) |
+   553→| Priority | `High` | `High` | `High` |
+   554→
+   555→### 9.2 Session Lifecycle
+   556→
+   557→```
+   558→┌──────────────────────────────────────────────────────────────┐
+   559→│                                                              │
+   560→│   CREATE                                                     │
+   561→│   │  OTP verified (customer) or login (admin)               │
+   562→│   │  → Sign JWT                                              │
+   563→│   │  → Store jti in Redis: session:{jti} → { user_id, role, │
+   564→│   │    created_at, last_active }                             │
+   565→│   │  → Set cookie                                            │
+   566→│   │                                                          │
+   567→│   VALIDATE (every authenticated request)                     │
+   568→│   │  → Read cookie from request                              │
+   569→│   │  → Verify JWT signature                                  │
+   570→│   │  → Check exp not passed                                  │
+   571→│   │  → Check jti not in revocation set: revoked:{jti}       │
+   572→│   │  → Extract user info from payload                        │
+   573→│   │  → For admin: check idle timeout                         │
+   574→│   │                                                          │
+   575→│   REFRESH                                                    │
+   576→│   │  → Customer: No refresh. 24h absolute expiry.           │
+   577→│   │  → Admin: Renew on activity. Reset 2h idle counter.     │
+   578→│   │  → New JWT with same jti, updated exp.                  │
+   579→│   │  → Set new cookie with updated Max-Age.                 │
+   580→│   │                                                          │
+   581→│   DESTROY                                                    │
+   582→   │  → Add jti to revocation set: SADD revoked:{jti}         │
+   583→│   │  → Set TTL on revocation = remaining token lifetime     │
+   584→│   │  → Clear cookie: Set Max-Age=0                           │
+   585→│   │  → Delete session:{jti} from Redis                      │
+   586→│   │                                                          │
+   587→└──────────────────────────────────────────────────────────────┘
+   588→```
+   589→
+   590→### 9.3 Concurrent Sessions
+   591→
+   592→| Role | Max concurrent sessions | Policy |
+   593→|---|---|---|
+   594→| Customer | 3 | Oldest session is revoked when a 4th is created. Elder users may have phone + tablet. |
+   595→| Admin | 1 | New login invalidates all other sessions. Security-first. |
+   596→| Driver | 1 | Same as admin. One active device. |
+   597→
+   598→### 9.4 Session Data in Redis
+   599→
+   600→```
+   601→Key:     session:{jti}
+   602→Value:   JSON {
+   603→           "user_id": "cus_01ABC123",
+   604→           "role": "customer",
+   605→           "phone": "+201012345678",
+   606→           "ip": "192.168.1.100",
+   607→           "user_agent": "Mozilla/5.0...",
+   608→           "created_at": 1700000000,
+   609→           "last_active": 1700050000
+   610→         }
+   611→TTL:     Same as JWT expiry (86400 for customer, 28800 for admin)
+   612→```
+   613→
+   614→### 9.5 Revocation Set in Redis
+   615→
+   616→```
+   617→Key:     revoked:{jti}
+   618→Value:   "1"  (placeholder)
+   619→TTL:     Remaining seconds until the JWT would have naturally expired
+   620→
+   621→On every auth check:
+   622→  EXISTS revoked:{jti}
+   623→  → If exists: treat as unauthenticated (401)
+   624→```
+   625→
+   626→This design means revocation entries auto-expire when the JWT would have expired anyway. No manual cleanup needed.
+   627→
+   628→---
+   629→
+   630→## 10. Role System
+   631→
+   632→### 10.1 Role Definitions
+   633→
+   634→```
+   635→┌──────────────────────────────────────────────────────────────┐
+   636→│                        ROLE HIERARCHY                         │
+   637→│                                                              │
+   638→│                     ┌──────────┐                             │
+   639→│                     │  ADMIN   │  Full platform access        │
+   640→│                     └────┬─────┘                             │
+   641→│                          │                                    │
+   642→│              ┌───────────┼───────────┐                       │
+   643→│              │           │           │                       │
+   644→│         ┌────┴────┐ ┌───┴────┐ ┌───┴──────┐                │
+   645→│         │ DRIVER  │ │ SUPPLY │ │ ANALYTICS │                │
+   646→│         │         │ │ MGR    │ │ VIEWER    │                │
+   647→│         └─────────┘ └────────┘ └───────────┘                │
+   648→│                                                              │
+   649→│         ┌─────────────┐  ┌──────────────────┐               │
+   650→│         │  CUSTOMER   │  │ WHOLESALE CUST.  │               │
+   651→│         │  (retail)   │  │ (verified/ent.)  │               │
+   652→│         └─────────────┘  └──────────────────┘               │
+   653→│                                                              │
+   654→│         ┌─────────────┐                                     │
+   655→│         │   GUEST     │  Unauthenticated browser             │
+   656→│         └─────────────┘                                     │
+   657→│                                                              │
+   658→└──────────────────────────────────────────────────────────────┘
+   659→```
+   660→
+   661→### 10.2 Role Catalog
+   662→
+   663→| Role | Code | Auth Method | JWT `role` | Description |
+   664→|---|---|---|---|---|
+   665→| Guest | `guest` | None | N/A | Browsing only. No account. |
+   666→| Customer (Retail) | `customer` | Phone OTP | `"customer"` | Standard household buyer |
+   667→| Customer (Wholesale Verified) | `customer` | Phone OTP | `"customer"` | Business buyer with wholesale pricing (differentiated by group, not role) |
+   668→| Customer (Wholesale Enterprise) | `customer` | Phone OTP | `"customer"` | Large business buyer with custom pricing |
+   669→| Driver | `driver` | Phone OTP | `"driver"` | Delivery personnel |
+   670→| Supply Manager | `supply_mgr` | Email + password | `"admin"` | Admin subset: manages products and inventory |
+   671→| Analytics Viewer | `analytics` | Email + password | `"admin"` | Admin subset: read-only dashboard |
+   672→| Admin | `admin` | Email + password | `"admin"` | Full platform access |
+   673→
+   674→### 10.3 Role vs. Customer Group
+   675→
+   676→Roles and customer groups serve different purposes:
+   677→
+   678→| Concept | Scope | Example |
+   679→|---|---|---|
+   680→| **Role** | Authentication and authorization. What you can *do*. | `customer` can place orders. `admin` can manage products. |
+   681→| **Customer Group** | Pricing and business logic. What you can *see* and *pay*. | `wholesale-verified` sees wholesale prices. `retail` sees retail prices. |
+   682→
+   683→A customer with role `customer` can be in any customer group. Their role doesn't change — their group determines their pricing.
+   684→
+   685→---
+   686→
+   687→## 11. Permission System
+   688→
+   689→### 11.1 Permission Model
+   690→
+   691→GGH uses a **role-based access control (RBAC)** model with optional permission-level granularity for admin sub-roles.
+   692→
+   693→```
+   694→Permission Format:  resource:action
+   695→
+   696→Examples:
+   697→  products:read       → Can view products
+   698→  products:write      → Can create/update products
+   699→  orders:read         → Can view orders
+   700→  orders:write        → Can update order status
+   701→  delivery:manage     → Can manage zones and slots
+   702→  erp:sync            → Can trigger ERP sync
+   703→  analytics:read      → Can view dashboards
+   704→  customers:read      → Can view customer data
+   705→  customers:write     → Can modify customer data
+   706→  settings:manage     → Can change platform settings
+   707→```
+   708→
+   709→### 11.2 Permission Matrix
+   710→
+   711→| Permission | Guest | Customer | Driver | Supply Mgr | Analytics | Admin |
+   712→|---|---|---|---|---|---|---|
+   713→| `products:read` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+   714→| `products:write` | ✗ | ✗ | ✗ | ✓ | ✗ | ✓ |
+   715→| `orders:read` | ✗ | Own only | Assigned | ✓ | ✓ | ✓ |
+   716→| `orders:write` | ✗ | ✗ | Status only | ✗ | ✗ | ✓ |
+   717→| `cart:manage` | ✓ (guest) | ✓ | ✗ | ✗ | ✗ | ✗ |
+   718→| `checkout:complete` | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ |
+   719→| `delivery:read` | ✓ | ✓ | Assigned | ✓ | ✗ | ✓ |
+   720→| `delivery:manage` | ✗ | ✗ | ✗ | ✓ | ✗ | ✓ |
+   721→| `erp:sync` | ✗ | ✗ | ✗ | ✓ | ✗ | ✓ |
+   722→| `analytics:read` | ✗ | ✗ | ✗ | ✗ | ✓ | ✓ |
+   723→| `customers:read` | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ |
+   724→| `customers:write` | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ |
+   725→| `settings:manage` | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ |
+   726→
+   727→### 11.3 Permission Enforcement
+   728→
+   729→Permissions are enforced at three layers:
+   730→
+   731→```
+   732→Layer 1: Route Middleware (BFF)
+   733→  → withAuth({ requiredRole: "customer" })
+   734→  → withPermission("orders:write")
+   735→  → Returns 401/403 before business logic runs
+   736→
+   737→Layer 2: Service Layer (BFF)
+   738→  → if (user.role === "driver") { filter orders to assigned zone }
+   739→  → Data-level filtering, not just route-level
+   740→
+   741→Layer 3: Database (PostgreSQL)
+   742→  → Row-level security for sensitive data
+   743→  → Admin queries use service role; customer queries use restricted role
+   744→```
+   745→
+   746→### 11.4 Permission Helper
+   747→
+   748→```typescript
+   749→// Type-safe permission check
+   750→type Permission =
+   751→  | "products:read"    | "products:write"
+   752→  | "orders:read"      | "orders:write"
+   753→  | "cart:manage"      | "checkout:complete"
+   754→  | "delivery:read"    | "delivery:manage"
+   755→  | "erp:sync"
+   756→  | "analytics:read"
+   757→  | "customers:read"   | "customers:write"
+   758→  | "settings:manage";
+   759→
+   760→const ROLE_PERMISSIONS: Record<string, Permission[]> = {
+   761→  guest:        ["products:read", "cart:manage", "delivery:read"],
+   762→  customer:     ["products:read", "cart:manage", "checkout:complete",
+   763→                 "orders:read", "delivery:read"],
+   764→  driver:       ["products:read", "orders:read", "orders:write",
+   765→                 "delivery:read"],
+   766→  supply_mgr:   ["products:read", "products:write", "orders:read",
+   767→                 "delivery:read", "delivery:manage", "erp:sync"],
+   768→  analytics:    ["products:read", "orders:read", "analytics:read"],
+   769→  admin:        [/* all permissions */],
+   770→};
+   771→
+   772→function hasPermission(role: string, permission: Permission): boolean {
+   773→  if (role === "admin") return true;
+   774→  return ROLE_PERMISSIONS[role]?.includes(permission) ?? false;
+   775→}
+   776→```
+   777→
+   778→---
+   779→
+   780→## 12. Guest Experience
+   781→
+   782→### 12.1 Guest Can Browse
+   783→
+   784→A user who has never logged in can still:
+   785→
+   786→| Action | Available | Notes |
+   787→|---|---|---|
+   788→| Browse products | ✓ | Full product catalog visible |
+   789→| View product detail | ✓ | Prices shown at retail tier |
+   790→| Search products | ✓ | Full search functionality |
+   791→| Create cart | ✓ | Guest cart created in Medusa |
+   792→| Add items to cart | ✓ | Cart ID stored in cookie |
+   793→| View delivery zones | ✓ | Zone list is public |
+   794→| Checkout | ✗ | Must authenticate first |
+   795→| View orders | ✗ | Must authenticate |
+   796→| Save templates | ✗ | Must authenticate |
+   797→
+   798→### 12.2 Guest Cart
+   799→
+   800→When a guest adds their first item to cart:
+   801→
+   802→```
+   803→1. BFF creates a cart in Medusa without customer_id
+   804→2. Cart ID is stored in a separate cookie: ggh_cart_id
+   805→3. Cart persists for 7 days (cart-level TTL in Medusa)
+   806→4. On login, guest cart is merged with customer cart
+   807→```
+   808→
+   809→### 12.3 Guest → Customer Conversion
+   810→
+   811→The conversion point is always checkout. The flow:
+   812→
+   813→```
+   814→Guest has items in cart
+   815→  → Taps "Checkout / إتمام الطلب"
+   816→  → Prompt: "Enter your phone to continue / أدخل رقمك للمتابعة"
+   817→  → OTP flow (same as login)
+   818→  → On success: cart merged, checkout continues
+   819→  → No lost items. No starting over.
+   820→```
+   821→
+   822→---
+   823→
+   824→## 13. Cart Merge on Login
+   825→
+   826→### 13.1 Merge Logic
+   827→
+   828→When a guest user authenticates, their guest cart must be merged with their existing customer cart (if any).
+   829→
+   830→```
+   831→SCENARIO A: New customer (no existing cart)
+   832→  Guest cart → becomes customer cart
+   833→  cart.customer_id = verified customer ID
+   834→  Done.
+   835→
+   836→SCENARIO B: Existing customer with empty cart
+   837→  Guest cart items → moved to existing customer cart
+   838→  Delete guest cart
+   839→  Use existing customer cart going forward
+   840→
+   841→SCENARIO C: Existing customer with non-empty cart
+   842→  Guest cart items → added to existing customer cart
+   843→  If same variant exists: sum quantities (cap at max stock)
+   844→  Delete guest cart
+   845→  Use existing customer cart going forward
+   846→
+   847→SCENARIO D: Same variant in both carts
+   848→  Guest cart: Rice 5kg × 3
+   849→  Customer cart: Rice 5kg × 2
+   850→  Merged: Rice 5kg × 5 (if stock allows)
+   851→  If stock is 4: Rice 5kg × 4 (cap at stock, notify user)
+   852→```
+   853→
+   854→### 13.2 Merge Rules
+   855→
+   856→| Rule | Implementation |
+   857→|---|---|
+   858→| **Customer cart wins** | The existing customer cart is the base. Guest items are merged into it. |
+   859→| **Quantity sum** | Same variant quantities are added together. |
+   860→| **Stock cap** | Final quantity cannot exceed available stock. User is notified. |
+   861→| **Price at merge time** | Items use current prices, not prices from when they were added to guest cart. |
+   862→| **Merge is atomic** | Either all items merge or none do. No partial merges. |
+   863→| **One-time operation** | Merge happens once at login. Guest cart cookie is cleared. |
+   864→
+   865→---
+   866→
+   867→## 14. Token Lifecycle
+   868→
+   869→### 14.1 Customer Token Lifecycle
+   870→
+   871→```
+   872→Issued                     Used                              Expired
+   873→   │                        │                                   │
+   874→   ▼                        ▼                                   ▼
+   875→┌────────┐           ┌────────────┐                      ┌──────────┐
+   876→│ Created│           │   Active   │                      │ Expired  │
+   877→│ at OTP │───24h────→│  session   │──── 24h elapsed ───→│ (cookie  │
+   878→│ verify │           │            │                      │ removed) │
+   879→└────────┘           └─────┬──────┘                      └──────────┘
+   880→                           │
+   881→                     Manual logout
+   882→                           │
+   883→                           ▼
+   884→                     ┌──────────┐
+   885→                     │ Revoked  │
+   886→                     │ (jti in  │
+   887→                     │  Redis)  │
+   888→                     └──────────┘
+   889→```
+   890→
+   891→### 14.2 What Happens When a Token Expires
+   892→
+   893→| Scenario | What the user sees | What happens |
+   894→|---|---|---|
+   895→| Browsing products | Nothing. Products are public. | No auth needed. |
+   896→| Viewing cart | Cart still visible (guest cart). | Cart ID in separate cookie. |
+   897→| Trying to checkout | "Your session expired. Please re-enter your phone number." / "انتهت الجلسة. أدخل رقمك تاني." | Prompt for OTP. Seamless re-auth. |
+   898→| Mid-checkout | Same message. Cart is preserved. | After re-auth, return to checkout step. |
+   899→| Viewing orders | Redirected to login. | After re-auth, return to orders page. |
+   900→
+   901→### 14.3 Token Renewal Strategy
+   902→
+   903→| Role | Renewal | Rationale |
+   904→|---|---|---|
+   905→| Customer | No renewal. Fixed 24h expiry. | Simplicity. Om Ibrahim doesn't understand "session renewal". She just re-enters her phone. |
+   906→| Admin | Activity-based renewal. Reset 2h idle timeout on each request. | Admin sessions are long but idle-protected. |
+   907→| Driver | No renewal. Fixed 14h expiry (full shift). | Driver shift ends → session ends. Next shift = new login. |
+   908→
+   909→---
+   910→
+   911→## 15. Security Measures
+   912→
+   913→### 15.1 Security Architecture
+   914→
+   915→```
+   916→┌──────────────────────────────────────────────────────────────┐
+   917→│                     SECURITY LAYERS                           │
+   918→│                                                              │
+   919→│   Layer 1: TRANSPORT                                        │
+   920→│   │  HTTPS everywhere (TLS 1.2+)                            │
+   921→│   │  HSTS header: max-age=31536000; includeSubDomains       │
+   922→│   │  No mixed content                                       │
+   923→│   │                                                          │
+   924→│   Layer 2: COOKIE PROTECTION                                │
+   925→│   │  HttpOnly: JavaScript cannot read cookies                │
+   926→│   │  Secure: Only sent over HTTPS                            │
+   927→│   │  SameSite=Strict: No cross-site request forgery         │
+   928→│   │  Path-scoped: Admin cookie only for /api/admin/         │
+   929→│   │                                                          │
+   930→│   Layer 3: JWT VALIDATION                                   │
+   931→│   │  Signature verified on every request                     │
+   932→│   │  Expiry checked on every request                        │
+   933→│   │  Revocation set checked on every request                │
+   934→│   │  Role-specific secrets prevent cross-role forgery       │
+   935→│   │                                                          │
+   936→│   Layer 4: RATE LIMITING                                    │
+   937→│   │  OTP requests: 1/min, 5/day per phone                   │
+   938→│   │  OTP verification: 3 attempts per code                  │
+   939→│   │  Login attempts: 5/15min, then 15min lockout            │
+   940→│   │  API requests: per-route-group limits                   │
+   941→│   │                                                          │
+   942→│   Layer 5: INPUT VALIDATION                                 │
+   943→│   │  Phone number: strict E.164 validation                   │
+   944→│   │  OTP code: exactly 4 digits, no letters                  │
+   945→│   │  Admin password: complexity requirements                 │
+   946→│   │  All inputs: Zod schema validation                       │
+   947→│   │                                                          │
+   948→│   Layer 6: LOGGING & AUDIT                                  │
+   949→│   │  Every auth event logged with request_id                 │
+   950→│   │  Failed attempts tracked and alerted                     │
+   951→│   │  Admin actions logged with full context                  │
+   952→│   │  Session creation/destruction events emitted            │
+   953→│                                                              │
+   954→└──────────────────────────────────────────────────────────────┘
+   955→```
+   956→
+   957→### 15.2 Threat Mitigation
+   958→
+   959→| Threat | Mitigation | Implementation |
+   960→|---|---|---|
+   961→| **XSS token theft** | HttpOnly cookies | JavaScript cannot read `document.cookie` for session tokens |
+   962→| **CSRF** | SameSite=Strict + POST-only mutations | Cookies are not sent on cross-site requests. Mutations require POST/PATCH/DELETE. |
+   963→| **OTP brute force** | 3 attempts per code + exponential lockout | After 3 failed attempts, the OTP is consumed and a new one must be requested |
+   964→| **OTP interception** | Short TTL (5 min) + single-use | Even if intercepted, the code expires quickly and can only be used once |
+   965→| **Session hijacking** | Secure flag + IP binding (optional) | Cookies only sent over HTTPS. Optional: verify IP hasn't changed for admin sessions. |
+   966→| **JWT tampering** | HMAC-SHA256 signature | Any modification invalidates the signature |
+   967→| **Admin credential stuffing** | Rate limiting + account lockout | 5 failed attempts → 15-minute lockout |
+   968→| **SMS pumping fraud** | IP-based rate limits + Egyptian numbers only | Only Egyptian phone numbers accepted. IP-level throttling. |
+   969→| **Token replay** | Short expiry + revocation on logout | Tokens expire naturally. Logout adds to revocation set. |
+   970→
+   971→### 15.3 Security Headers
+   972→
+   973→Every response includes these headers:
+   974→
+   975→| Header | Value | Purpose |
+   976→|---|---|---|
+   977→| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | Force HTTPS |
+   978→| `X-Content-Type-Options` | `nosniff` | Prevent MIME sniffing |
+   979→| `X-Frame-Options` | `DENY` | Prevent clickjacking |
+   980→| `X-XSS-Protection` | `0` | Disable buggy browser XSS filter (we sanitize server-side) |
+   981→| `Content-Security-Policy` | `default-src 'self'; ...` | Prevent inline script injection |
+   982→| `Referrer-Policy` | `strict-origin-when-cross-origin` | Limit referrer leakage |
+   983→
+   984→---
+   985→
+   986→## 16. Rate Limiting for Auth
+   987→
+   988→### 16.1 Auth-Specific Rate Limits
+   989→
+   990→| Endpoint | Window | Limit | Key | Lockout |
+   991→|---|---|---|---|---|
+   992→| `POST /auth/otp/request` | 60 seconds | 1 per phone | `rl:otp:{phone}` | — |
+   993→| `POST /auth/otp/request` | 24 hours | 5 per phone | `rl:otp-daily:{phone}` | — |
+   994→| `POST /auth/otp/request` | 1 hour | 10 per IP | `rl:otp-ip:{ip}` | — |
+   995→| `POST /auth/otp/verify` | Per OTP | 3 attempts | In OTP record | OTP consumed after 3 fails |
+   996→| `POST /admin/auth/login` | 15 minutes | 5 per email | `rl:admin-login:{email}` | 15-min lockout after 5 |
+   997→| `POST /admin/auth/login` | 1 hour | 20 per IP | `rl:admin-login-ip:{ip}` | — |
+   998→
+   999→### 16.2 Progressive Lockout for OTP
+  1000→
+  1001→```
+  1002→Attempt 1-3:  Normal verification
+  1003→  → "Code is incorrect. X attempts remaining."
+  1004→  → "الكود غلط. باقي X محاولات."
+  1005→
+  1006→After 3 failed attempts (OTP consumed):
+  1007→  → "Too many incorrect attempts. Please request a new code."
+  1008→  → "محاولات كتير غلط. اطلب كود جديد."
+  1009→  → Must request new OTP (subject to request rate limits)
+  1010→
+  1011→After 5 OTP requests in one day:
+  1012→  → "You've requested too many codes today. Try again tomorrow."
+  1013→  → "طلبت أكواد كتير النهاردة. حاول بكرة."
+  1014→  → Hard block until midnight Cairo time
+  1015→```
+  1016→
+  1017→---
+  1018→
+  1019→## 17. Device & Session Tracking
+  1020→
+  1021→### 17.1 Session Metadata
+  1022→
+  1023→Every session records device information for security auditing:
+  1024→
+  1025→| Field | Source | Purpose |
+  1026→|---|---|---|
+  1027→| `ip` | `X-Forwarded-For` or `request.ip` | Geographic anomaly detection |
+  1028→| `user_agent` | `User-Agent` header | Device identification |
+  1029→| `created_at` | Server timestamp | Session age tracking |
+  1030→| `last_active` | Updated on each request | Idle detection (admin) |
+  1031→
+  1032→### 17.2 Customer Session List
+  1033→
+  1034→Customers can see their active sessions (accessible from profile settings):
+  1035→
+  1036→```
+  1037→GET /api/v1/account/sessions
+  1038→
+  1039→Response:
+  1040→{
+  1041→  "data": [
+  1042→    {
+  1043→      "jti": "sess_a1b2c3d4",
+  1044→      "deviceEn": "Chrome on Android",
+  1045→      "deviceAr": "كروم على أندرويد",
+  1046→      "lastActiveAt": "2025-01-15T10:30:00Z",
+  1047→      "isCurrent": true
+  1048→    },
+  1049→    {
+  1050→      "jti": "sess_x5y6z7w8",
+  1051→      "deviceEn": "Safari on iPhone",
+  1052→      "deviceAr": "سافاري على آيفون",
+  1053→      "lastActiveAt": "2025-01-14T18:00:00Z",
+  1054→      "isCurrent": false
+  1055→    }
+  1056→  ],
+  1057→  "meta": { ... }
+  1058→}
+  1059→```
+  1060→
+  1061→### 17.3 Revoke Other Sessions
+  1062→
+  1063→```
+  1064→DELETE /api/v1/account/sessions/:jti
+  1065→
+  1066→Response (200):
+  1067→{
+  1068→  "data": { "revoked": true },
+  1069→  "meta": { ... }
+  1070→}
+  1071→```
+  1072→
+  1073→This allows a user to remotely log out from a device they no longer have access to. The `jti` is added to the Redis revocation set.
+  1074→
+  1075→---
+  1076→
+  1077→## 18. Passwordless Philosophy — Why No Passwords
+  1078→
+  1079→### 18.1 The Password Problem
+  1080→
+  1081→| Password Issue | Impact on Om Ibrahim |
+  1082→|---|---|
+  1083→| **Forgotten passwords** | She calls customer support instead of resetting. Support cost ×10. |
+  1084→| **Password reuse** | She uses the same password everywhere. One breach compromises all. |
+  1085→| **Complex requirements** | "Must contain uppercase, number, special character" — she writes it on paper. |
+  1086→| **Phishing** | She can't distinguish a real login screen from a fake one. |
+  1087→| **Reset flow frustration** | "Check your email" — she doesn't have email, or she can't find the reset link. |
+  1088→
+  1089→### 18.2 Why OTP Wins for GGH
+  1090→
+  1091→| Factor | OTP | Password |
+  1092→|---|---|---|
+  1093→| Memory burden | None. Code is in the SMS. | Must remember a password. |
+  1094→| Phishing resistance | Code expires in 5 min. Can't be reused. | Password works forever until changed. |
+  1095→| Typing difficulty | 4 digits. One-handed. | Complex string. Multiple character types. |
+  1096→| Reset flow | None needed. Just request a new code. | Email-based reset. Multi-step. Frustrating. |
+  1097→| Elder-friendly | ✓ Large digit entry. No keyboard switching. | ✗ Symbols, mixed case, keyboard toggling. |
+  1098→| Security | 10,000 combinations. 3 attempts. 5-minute window. | Often "123456" or "password". |
+  1099→
+  1100→### 18.3 When Passwords ARE Appropriate
+  1101→
+  1102→Admin accounts use passwords because:
+  1103→
+  1104→1. Admins are trained staff, not end users
+  1105→2. Admin access is high-privilege — needs stronger auth
+  1106→3. Admin accounts are few — manageable password overhead
+  1107→4. Future: Admin accounts will get TOTP-based 2FA (not SMS-based)
+  1108→
+  1109→---
+  1110→
+  1111→## 19. Account Recovery
+  1112→
+  1113→### 19.1 Customer Account Recovery
+  1114→
+  1115→There is no "forgot password" flow because there are no passwords. Recovery scenarios:
+  1116→
+  1117→| Scenario | Solution |
+  1118→|---|---|
+  1119→| Phone number lost | Contact support with ID verification. Manual phone number update. |
+  1120→| Phone number changed | Contact support with ID verification. Manual phone number update. |
+  1121→| OTP not received | "Resend code" button (60-second cooldown). Try different SMS provider (automatic fallback). |
+  1122→| Account locked (rate limit) | Wait until rate limit window expires. Automatic unlock. |
+  1123→| Suspicious activity | Customer support can revoke all sessions and force re-authentication. |
+  1124→
+  1125→### 19.2 Admin Account Recovery
+  1126→
+  1127→| Scenario | Solution |
+  1128→|---|---|
+  1129→| Forgot password | Email-based reset link. Link expires in 1 hour. Can only be used once. |
+  1130→| Account locked | 15-minute automatic unlock. Or another admin can unlock manually. |
+  1131→| Email compromised | Another admin can reset the password and force 2FA re-enrollment. |
+  1132→| All admins locked | Emergency backdoor via environment variable `ADMIN_EMERGENCY_TOKEN` (single-use, logged, audited). |
+  1133→
+  1134→### 19.3 Support Tools
+  1135→
+  1136→Customer support (admin role with `customers:write`) can:
+  1137→
+  1138→| Action | API | Effect |
+  1139→|---|---|---|
+  1140→| Revoke all sessions | `DELETE /api/admin/v1/customers/:id/sessions` | Forces re-authentication |
+  1141→| Reset phone number | `PATCH /api/admin/v1/customers/:id` with `{ "phone": "+2010..." }` | Updates identity (requires verification) |
+  1142→| Change customer group | `PATCH /api/admin/v1/customers/:id/groups` | Upgrades/downgrades pricing tier |
+  1143→| View auth log | `GET /api/admin/v1/customers/:id/auth-log` | Shows login/OTP/failure history |
+  1144→
+  1145→---
+  1146→
+  1147→## 20. Elder-Friendly Auth UX
+  1148→
+  1149→### 20.1 Design Principles for Auth Screens
+  1150→
+  1151→| Principle | Implementation |
+  1152→|---|---|
+  1153→| **One thing at a time** | Never show phone input and OTP input on the same screen. Two distinct steps. |
+  1154→| **Large touch targets** | All interactive elements ≥ 48px. OTP digit boxes ≥ 56px. Buttons full-width ≥ 56px height. |
+  1155→| **Clear progress indication** | "Step 1 of 2" / "الخطوة ١ من ٢" visible at all times. |
+  1156→| **No jargon** | "Enter the code we sent" not "Enter OTP". "أدخل الكود اللي بعتناه" not "أدخل كلمه المرور لمرة واحدة". |
+  1157→| **Auto-focus** | Phone input auto-focused on page load. OTP first digit box auto-focused after SMS sent. |
+  1158→| **Auto-advance** | After typing 4th digit in OTP, auto-submit. No need to tap "Confirm". |
+  1159→| **Visible countdown** | "Resend code in 45s" / "إعادة الإرسال بعد ٤٥ ثانية" — clear, visible, Arabic-Indic numerals. |
+  1160→| **Error near the field** | "The code is incorrect" appears directly below the OTP boxes, not at the top of the page. |
+  1161→| **Never lose data** | If OTP fails, phone number is still filled in. User doesn't re-enter it. |
+  1162→| **Haptic feedback** | On mobile, trigger light vibration on OTP verification failure. |
+  1163→
+  1164→### 20.2 Phone Number Input
+  1165→
+  1166→```
+  1167→┌─────────────────────────────────────────────────┐
+  1168→│                                                 │
+  1169→│  أدخل رقم موبايلك                               │
+  1170→│  Enter your mobile number                       │
+  1171→│                                                 │
+  1172→│  ┌─────────────────────────────────────────┐   │
+  1173→│  │ 🇪🇬 +20 │  01XXXXXXXXX                  │   │   ← Large input (56px height)
+  1174→│  └─────────────────────────────────────────┘   │
+  1175→│                                                 │
+  1176→│  هنبعتلك كود على الرقم ده                      │
+  1177→│  We'll send a code to this number              │
+  1178→│                                                 │
+  1179→│  ┌─────────────────────────────────────────┐   │
+  1180→│  │          أرسل الكود  Send Code           │   │   ← Full-width, 56px height
+  1181→│  └─────────────────────────────────────────┘   │
+  1182→│                                                 │
+  1183→└─────────────────────────────────────────────────┘
+  1184→```
+  1185→
+  1186→**Auto-correction applied:**
+  1187→
+  1188→| User types | Stored as | Why |
+  1189→|---|---|---|
+  1190→| `01012345678` | `+201012345678` | Common local format |
+  1191→| `201012345678` | `+201012345678` | Country code without + |
+  1192→| `00201012345678` | `+201012345678` | International dial prefix |
+  1193→| `+201012345678` | `+201012345678` | Already correct |
+  1194→
+  1195→### 20.3 OTP Input
+  1196→
+  1197→```
+  1198→┌─────────────────────────────────────────────────┐
+  1199→│                                                 │
+  1200→│  أدخل الكود اللي بعتناه                         │
+  1201→│  Enter the code we sent                         │
+  1202→│                                                 │
+  1203→│      ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐      │
+  1204→│      │  4   │ │  8   │ │  2   │ │  7   │      │   ← 56×56px boxes
+  1205→│      └──────┘ └──────┘ └──────┘ └──────┘      │
+  1206→│                                                 │
+  1207→│  الكود هيوصل لرقم +2010****5678                 │
+  1208→│  Code sent to +2010****5678                    │
+  1209→│                                                 │
+  1210→│  إعادة الإرسال بعد ٤٥ ثانية                     │
+  1211→│  Resend code in 45 seconds                     │
+  1212→│                                                 │
+  1213→│  ┌─────────────────────────────────────────┐   │
+  1214→│  │            تأكيد  Confirm                │   │   ← Optional (auto-submits)
+  1215→│  └─────────────────────────────────────────┘   │
+  1216→│                                                 │
+  1217→│  الكود غلط. باقي ٢ محاولات                     │   ← Error (appears here)
+  1218→│  The code is incorrect. 2 attempts remaining.  │
+  1219→│                                                 │
+  1220→└─────────────────────────────────────────────────┘
+  1221→```
+  1222→
+  1223→---
+  1224→
+  1225→## 21. RTL & Bilingual in Auth
+  1226→
+  1227→### 21.1 Bilingual Auth Messages
+  1228→
+  1229→Every auth message exists in both Arabic and English. The frontend displays based on locale:
+  1230→
+  1231→| Context | English | Arabic |
+  1232→|---|---|---|
+  1233→| OTP sent | "Code sent to your phone" | "تم إرسال الكود لموبايلك" |
+  1234→| OTP expired | "The code has expired. Please request a new one." | "الكود انتهى. اطلب كود جديد." |
+  1235→| Wrong code | "The code you entered is incorrect" | "الكود اللي دخلتوه غلط" |
+  1236→| Account locked | "Too many attempts. Try again in 15 minutes." | "محاولات كتير. حاول تاني بعد ١٥ دقيقة." |
+  1237→| Session expired | "Your session has expired. Please log in again." | "الجلسة انتهت. سجل دخولك تاني." |
+  1238→| Welcome new user | "Welcome to GGH!" | "أهلاً بكم في جملة لحد البيت!" |
+  1239→| Welcome returning | "Welcome back!" | "أهلاً بيك تاني!" |
+  1240→
+  1241→### 21.2 RTL Considerations for Auth
+  1242→
+  1243→| Element | RTL Behavior |
+  1244→|---|---|
+  1245→| Phone input | `dir="ltr"` always (phone numbers are LTR globally) |
+  1246→| OTP digit boxes | `dir="ltr"` always (digits are LTR) |
+  1247→| Error messages | `dir="rtl"` in Arabic, `dir="ltr"` in English |
+  1248→| Buttons | Text alignment follows `dir` of the page |
+  1249→| Countdown timer | Arabic-Indic numerals in RTL: "٤٥ ثانية" not "45 ثانية" |
+  1250→| Country code flag | 🇪🇬 always on the right side in RTL (start of reading direction) |
+  1251→
+  1252→---
+  1253→
+  1254→## 22. Authentication Error Codes
+  1255→
+  1256→### 22.1 Customer Auth Errors
+  1257→
+  1258→| Code | HTTP | Message EN | Message AR | Detail |
+  1259→|---|---|---|---|---|
+  1260→| `AUTH_INVALID_OTP` | 401 | The code you entered is incorrect | الكود اللي دخلتوه غلط | `{ remaining_attempts: 2 }` |
+  1261→| `AUTH_OTP_EXPIRED` | 401 | The code has expired. Please request a new one. | الكود انتهى. اطلب كود جديد. | — |
+  1262→| `AUTH_OTP_LOCKED` | 429 | Too many incorrect attempts. Please request a new code. | محاولات كتير غلط. اطلب كود جديد. | — |
+  1263→| `AUTH_OTP_RATE_LIMITED` | 429 | Too many code requests. Please wait before trying again. | طلبت أكواد كتير. استنى شوية. | `{ retry_after_seconds: 45 }` |
+  1264→| `AUTH_OTP_DAILY_LIMIT` | 429 | You've requested too many codes today. Try again tomorrow. | طلبت أكواد كتير النهاردة. حاول بكرة. | `{ retry_after_seconds: 43200 }` |
+  1265→| `AUTH_INVALID_PHONE` | 400 | Please enter a valid Egyptian phone number | أدخل رقم موبايل مصري صحيح | — |
+  1266→| `AUTH_SESSION_EXPIRED` | 401 | Your session has expired. Please log in again. | الجلسة انتهت. سجل دخولك تاني. | — |
+  1267→| `AUTH_UNAUTHORIZED` | 401 | Please log in to continue | سجل دخولك عشان تكمل | — |
+  1268→| `AUTH_FORBIDDEN` | 403 | You don't have permission to access this | مش معاك صلاحية للصفحة دي | — |
+  1269→
+  1270→### 22.2 Admin Auth Errors
+  1271→
+  1272→| Code | HTTP | Message EN | Message AR | Detail |
+  1273→|---|---|---|---|---|
+  1274→| `AUTH_INVALID_CREDENTIALS` | 401 | Invalid email or password | الإيميل أو الباسورد غلط | — |
+  1275→| `AUTH_ACCOUNT_LOCKED` | 423 | Account temporarily locked. Try again in 15 minutes. | الحساب مقفول مؤقتاً. حاول بعد ١٥ دقيقة. | `{ retry_after_seconds: 900 }` |
+  1276→| `AUTH_PASSWORD_EXPIRED` | 401 | Your password has expired. Please set a new one. | الباسورد انتهى. اعمل واحد جديد. | — |
+  1277→| `AUTH_2FA_REQUIRED` | 403 | Two-factor authentication is required | لازم تعمل تأكيد بخطوتين | — |
+  1278→
+  1279→---
+  1280→
+  1281→## 23. Medusa Auth Integration
+  1282→
+  1283→### 23.1 How GGH Uses Medusa Auth
+  1284→
+  1285→Medusa v2 has its own authentication system. GGH does not use it directly for customer login. Instead:
+  1286→
+  1287→```
+  1288→GGH BFF handles auth             Medusa handles data
+  1289→────────────────────             ──────────────────
+  1290→
+  1291→OTP generation        →          NOT USED
+  1292→OTP verification      →          NOT USED
+  1293→JWT signing           →          NOT USED
+  1294→Session management    →          NOT USED
+  1295→
+  1296→Customer creation     →          Medusa POST /admin/customers
+  1297→Customer lookup       →          Medusa GET /admin/customers?phone=...
+  1298→Customer group assign →          Medusa POST /admin/customers/:id/customer-groups
+  1299→Cart operations       →          Medusa Store API (with BFF-synthesized token)
+  1300→Order operations      →          Medusa Store API (with BFF-synthesized token)
+  1301→```
+  1302→
+  1303→### 23.2 BFF-to-Medusa Authentication
+  1304→
+  1305→When the BFF needs to call Medusa on behalf of an authenticated customer:
+  1306→
+  1307→```
+  1308→1. Customer JWT is validated by BFF
+  1309→2. BFF exchanges customer identity for a Medusa Store API token
+  1310→3. BFF calls Medusa Store API with that token
+  1311→4. Medusa operations are scoped to that customer
+  1312→```
+  1313→
+  1314→For admin operations:
+  1315→
+  1316→```
+  1317→1. Admin JWT is validated by BFF
+  1318→2. BFF uses a server-side Medusa Admin API key
+  1319→3. BFF calls Medusa Admin API with admin permissions
+  1320→4. Admin permissions are checked by BFF before calling Medusa
+  1321→```
+  1322→
+  1323→### 23.3 Why Not Use Medusa Auth Directly
+  1324→
+  1325→| Reason | Detail |
+  1326→|---|---|
+  1327→| Medusa uses email/password | GGH uses phone/OTP. Fundamental mismatch. |
+  1328→| Medusa session = Bearer token in header | GGH session = HttpOnly cookie. More secure. |
+  1329→| Medusa doesn't support Egyptian OTP flow | Would require custom Medusa module. More complexity. |
+  1330→| BFF needs to add GGH-specific claims | `zone_id`, `is_wholesale`, `locale` — not in Medusa's auth model. |
+  1331→| Decoupling | If we switch from Medusa later, auth doesn't change. |
+  1332→
+  1333→---
+  1334→
+  1335→## 24. Future: Multi-Factor & Biometric
+  1336→
+  1337→### 24.1 Phase 2: Admin 2FA (TOTP)
+  1338→
+  1339→For admin accounts, add time-based one-time password (TOTP) as a second factor:
+  1340→
+  1341→```
+  1342→Login flow (with 2FA):
+  1343→  1. Email + password → validated
+  1344→  2. TOTP code required → validated
+  1345→  3. Session created
+  1346→
+  1347→Setup:
+  1348→  - Admin scans QR code in authenticator app
+  1349→  - Backup codes generated (one-time use)
+  1350→  - 2FA enrollment is mandatory for all admins
+  1351→```
+  1352→
+  1353→### 24.2 Phase 3: Biometric Login (Mobile)
+  1354→
+  1355→When GGH launches a mobile app:
+  1356→
+  1357→```
+  1358→WebAuthn / Biometric login:
+  1359→  1. First login: OTP as usual
+  1360→  2. Prompt: "Use fingerprint to log in next time?"
+  1361→  3. If yes: register WebAuthn credential
+  1362→  4. Subsequent logins: fingerprint / face scan
+  1363→  5. Fallback: OTP still available
+  1364→```
+  1365→
+  1366→| Benefit | For Om Ibrahim |
+  1367→|---|---|
+  1368→| No typing at all | Touch the fingerprint sensor → logged in |
+  1369→| No SMS dependency | Works even with poor cellular signal |
+  1370→| Faster | 1 second vs. 30 seconds for OTP |
+  1371→
+  1372→### 24.3 Phase 4: WhatsApp OTP
+  1373→
+  1374→Egyptian users are deeply familiar with WhatsApp:
+  1375→
+  1376→```
+  1377→WhatsApp OTP flow:
+  1378→  1. User enters phone number
+  1379→  2. OTP sent via WhatsApp (not SMS)
+  1380→  3. User taps the code in WhatsApp → auto-fills in GGH
+  1381→  4. No typing needed
+  1382→
+  1383→Benefits:
+  1384→  - Cheaper than SMS
+  1385→  - Higher delivery rate
+  1386→  - Users trust WhatsApp more than SMS
+  1387→  - Elder users check WhatsApp more than SMS
+  1388→```
+  1389→
+  1390→### 24.4 Migration Path
+  1391→
+  1392→| Phase | Timeline | Change | Impact on existing sessions |
+  1393→|---|---|---|---|
+  1394→| v1 (current) | Launch | Phone OTP only | — |
+  1395→| v1.1 | +3 months | WhatsApp OTP as alternative | None. Backward compatible. |
+  1396→| v2 | +6 months | Admin 2FA (TOTP) | Admin sessions require re-enrollment. Customer sessions unchanged. |
+  1397→| v3 | +12 months | Biometric (mobile app) | New capability. Existing auth still works. |
+  1398→
+  1399→---
+  1400→
+  1401→> **Next document:** `09_StateManagement.md` — Client state architecture, server state patterns, caching boundaries, and Zustand + TanStack Query conventions.
+  1402→
