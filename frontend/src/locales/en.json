@@ -1,0 +1,16 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "search": "Search products",
+    "cart": "Cart",
+    "checkout": "Checkout",
+    "account": "Account",
+    "login": "Sign In",
+    "register": "Create Account",
+    "about": "About Us",
+    "contact": "Contact Support",
+    "home": "Home",
+    "all_products": "All Products",
+    "deals": "Deals"
+  }
+}
