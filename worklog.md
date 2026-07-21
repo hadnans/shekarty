@@ -330,3 +330,66 @@ Verification:
 - No crash errors in dev.log
 
 Git Commit: Included in (433ed78) — committed alongside ERP module by parallel agent
+
+---
+Task ID: 3-c
+Agent: Delivery Tracking Developer
+Task: Build Delivery Tracking System
+
+Work Log:
+- Updated Prisma schema with DeliveryAssignment model (id, orderId @unique, driverId, warehouseId, status, assignedAt, acceptedAt, pickedUpAt, deliveredAt, failedAt, failureReason, notes, indexes)
+- Added Order.assignment (DeliveryAssignment?) and Driver.assignments (DeliveryAssignment[]) relations
+- Ran db:push to sync DeliveryAssignment table to SQLite database
+- Created src/lib/delivery/config.ts — System configuration (search radius 15km, max 3 active deliveries per driver, min 3.5 rating, traffic multipliers by time-of-day, vehicle speeds, scoring weights: distance 0.4, rating 0.35, load 0.25)
+- Created src/lib/delivery/types.ts — 13 DeliverySteps with valid transition map, step labels EN/AR, STEP_TO_ORDER_STATUS mapping, DELIVERY_STEPS_ORDER display sequence, typed interfaces (DeliveryTracking, DeliveryStepTimeline, DriverInfo, WarehouseInfo, DriverLocation, AssignmentResult, DispatcherOverview, DriverCandidate, DeliveryNotificationTemplate)
+- Created src/lib/delivery/tracking.ts — State machine: transitionOrder (validates transitions, creates OrderStatusHistory, updates Order status, updates DeliveryAssignment), getTrackingInfo (builds full customer tracking view with driver location from GPS logs, warehouse info, step timeline), buildStepTimeline, mapOrderStatusToStep, isValidTransition
+- Created src/lib/delivery/assignment.ts — assignDriver (manual, validates driver availability and current load), autoAssignDriver (finds warehouse for delivery zone, scores candidates by distance/rating/load, assigns best), reassignDriver (cancels old assignment, creates new)
+- Created src/lib/delivery/dispatcher.ts — getDispatcherOverview (active deliveries, available drivers, pending/packing orders, avg delivery time, status breakdown), getPendingAssignments, getActiveDeliveries, getRecentCompletions
+- Created src/lib/delivery/warehouse-ops.ts — getPendingPackingOrders (filter by warehouse), markAsPacked (transitions through confirmed→being_packed→ready_for_pickup), handoffToDriver (validates assignment status, updates to picked_up)
+- Created src/lib/delivery/eta.ts — calculateETA (GPS-based with Haversine distance, vehicle speed, traffic multipliers, warehouse-to-customer calculation), estimateDeliveryWindow (60-min window, bilingual labels)
+- Created src/lib/delivery/notifications.ts — 13 bilingual notification templates (EN/AR) for each delivery step, sendDeliveryNotification (stores in Notification model), getNotificationTemplate, getAllNotificationTemplates
+- Created src/lib/delivery/index.ts — Barrel export of all modules
+- Created 13 API routes:
+  1. /api/delivery/track/[orderId] — GET: public tracking (no auth required)
+  2. /api/delivery/assign — POST: manual driver assignment (auth required)
+  3. /api/delivery/auto-assign — POST: auto-assign best driver (auth required)
+  4. /api/delivery/update-status — POST: update delivery status with transition validation (auth required)
+  5. /api/delivery/driver/active-orders — GET: driver's current deliveries
+  6. /api/delivery/driver/accept — POST: driver accepts assignment
+  7. /api/delivery/driver/arrived — POST: driver arrived at pickup/delivery location
+  8. /api/delivery/driver/complete — POST: driver marks delivery complete (increments driver stats)
+  9. /api/delivery/warehouse/pending — GET: orders awaiting packing
+  10. /api/delivery/warehouse/ready — POST: mark order packed (auth required)
+  11. /api/delivery/warehouse/handoff — POST: hand off to driver (auth required)
+  12. /api/delivery/dispatcher/dashboard — GET: full dispatcher overview
+  13. /api/delivery/dispatcher/reassign — POST: reassign driver (auth required)
+- Created 6 frontend components:
+  1. TrackingPage.tsx — Customer tracking view with 30s polling, status banner, map, driver card, timeline
+  2. DriverTimeline.tsx — Visual step timeline with icons, animated current step, timestamps
+  3. LiveMap.tsx — Map placeholder with driver/warehouse/destination markers and GPS heading
+  4. DriverCard.tsx — Driver info with name, vehicle type, plate, rating stars, tel: call button
+  5. DispatcherDashboard.tsx — Admin view with stat cards, pending/active/completed tabs, auto-assign button
+  6. WarehouseDashboard.tsx — Packing queue, packed orders, handoff actions
+- Updated src/app/page.tsx — Added AppView types (tracking, dispatcher, warehouse), trackingOrderId state, AnimatePresence sections for all 3 delivery views
+- Updated src/features/order/components/OrdersView.tsx — Added onTrackOrder callback prop and Track Order button on active orders
+- Updated src/features/auth/components/AccountView.tsx — Added onNavigate callback prop and Admin Tools section with Dispatcher Dashboard and Warehouse Dashboard links
+
+Key Design Decisions:
+- Strict state machine: each DeliveryStep can only transition to explicitly allowed next steps
+- Auto-assignment scores by weighted combination: 40% distance, 35% rating, 25% current load
+- Tracking endpoint is PUBLIC (no auth required) for customer sharing
+- All other endpoints require auth via requireAuth()
+- Driver GPS location sourced from GpsPositionLog (created by task 3-b)
+- ETA calculation uses Haversine distance, vehicle speed by type, and time-of-day traffic multipliers
+- Notifications stored in existing Notification model (push notifications as future enhancement)
+- Money always as integer piastres throughout
+- All user-facing strings bilingual EN/AR
+- JSDoc comments on all exported functions
+- GGH design tokens (var(--ggh-primary), etc.) used in all components
+- 48px+ touch targets, Framer Motion animations, proper ARIA labels
+
+Verification:
+- lint: 0 errors, 149 warnings (all pre-existing at warn level)
+- Prisma schema pushed successfully
+- All 13 delivery API routes compile and respond
+- Frontend components render correctly with GGH design system
