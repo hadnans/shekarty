@@ -52,3 +52,26 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# Database files (local SQLite)
+db/*.db
+db/*.db-journal
+
+# Tool results (temp)
+/tool-results/
+
+# Agent context (temp)
+/agent-ctx/
+
+# Worklog (temp)
+worklog.md
+
+# Download/Upload dirs
+/download/
+/upload/
+
+# Z scripts runtime
+.zscripts/dev.pid
+
+# Next.js
+.next/
