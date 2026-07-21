@@ -278,3 +278,55 @@ Verification:
 - All files compiled successfully
 
 Git Commit: feat: ERPNext integration module — client, sync, 10 domain modules, API routes (433ed78)
+
+---
+Task ID: 3-b
+Agent: Location Intelligence Developer
+Task: Build GPS/Maps/Logistics Module
+
+Work Log:
+- Updated Prisma schema with Geofence model (id, nameEn/Ar, type, centerLat/Lng, radius, points JSON, metadata JSON, isActive, timestamps) and GpsPositionLog model (id, entityId, entityType, latitude, longitude, heading, speed, accuracy, batteryLevel, timestamp, composite indexes)
+- Ran db:push to sync new tables to SQLite database
+- Created src/lib/location/config.ts — Zod-validated map provider config (MAP_PROVIDER env, provider API keys), default to OSM (free), cached config singleton, isProviderConfigured() helper
+- Created src/lib/location/types.ts — 15+ TypeScript interfaces: LatLng, RouteStep, RouteResult, GeocodeResult, Geofence, GeofenceEvent, GpsPosition, RouteOptimizationRequest, OptimizedRoute, LatLngBounds, Lang, MapProviderType
+- Created src/lib/location/providers/interface.ts — Abstract MapProvider interface with geocode, reverseGeocode, getRoute, getDistanceMatrix, getTileUrl methods
+- Created src/lib/location/providers/osm.ts — Full OSM/Nominatim/OSRM implementation with rate limiting (1.1s Nominatim, 0.5s OSRM), User-Agent headers, coordinate parsing, instruction formatting
+- Created src/lib/location/providers/google.ts — Google Maps Geocoding + Directions + Distance Matrix API implementation, HTML stripping, address component extraction
+- Created src/lib/location/providers/mapbox.ts — Mapbox Geocoding + Directions API implementation, context parsing, batch distance matrix fallback
+- Created src/lib/location/providers/here.ts — HERE Geocoder + Routing API implementation, reverse geocoding, turn-by-turn action parsing
+- Created src/lib/location/providers/index.ts — Provider factory with graceful fallback (unconfigured providers → OSM), cached singleton, resetMapProvider() for testing
+- Created src/lib/location/geocoding.ts — geocodeAddress, reverseGeocode, geocodeArea functions with in-memory LRU cache (100 entries, 1hr TTL), clearGeocodeCache()
+- Created src/lib/location/routing.ts — getRoute, getETA, getDistance, getMultiStopRoute, getDistanceMatrix, haversineDistance (geometric), formatDuration/formatDistance (bilingual EN/AR)
+- Created src/lib/location/geofencing.ts — createGeofence, isPointInCircle (Haversine), isPointInPolygon (ray casting), checkPointInGeofence, checkPointInAllGeofences, detectGeofenceEvents (enter/exit), prismaToGeofence/geofenceToPrisma mappers
+- Created src/lib/location/gps-tracking.ts — updatePosition (persist + cache), getPosition (cache-first → DB), getPositionHistory (time range), getNearbyDrivers (Haversine filtering of available drivers), calculateDriverETA, getAllCurrentPositions
+- Created src/lib/location/route-optimization.ts — optimizeRoute with nearest-neighbor heuristic, time window support, service time accounting, Haversine fallback when routing unavailable, estimateDuration (30 km/h Cairo average)
+- Created src/lib/location/index.ts — Barrel export of all public APIs
+- Created 6 API route groups:
+  1. /api/location/geocode — GET: forward/reverse geocode (Zod validated)
+  2. /api/location/route — POST: calculate route between points
+  3. /api/location/geofences — GET: list all; POST: create (circle/polygon, discriminated union schema)
+  4. /api/location/geofences/[id] — GET/PUT/DELETE: single geofence CRUD
+  5. /api/location/track — GET: driver position or nearby drivers; POST: update GPS position
+  6. /api/location/optimize-route — POST: optimize multi-stop route
+
+Key Design Decisions:
+- OSM as default provider (free, no API key, always works)
+- Graceful fallback: unconfigured providers auto-fall back to OSM
+- All providers use native fetch only, no external HTTP libraries
+- LRU caching for geocoding (100 entries, 1hr TTL) reduces external API calls
+- In-memory GPS position cache for real-time queries, DB for history
+- Haversine formula for geometric distance, ray casting for polygon containment
+- Nearest-neighbor heuristic for route optimization (production would use OR-Tools)
+- Bilingual EN/AR support in formatting functions
+- Zod validation on all API inputs
+- No `any` types — TypeScript strict throughout
+
+Verification:
+- lint: 0 errors, 149 warnings (all pre-existing at warn level)
+- Geofences API: GET returns empty list, POST creates circle geofence, GET by ID returns correct data
+- Track API: POST creates GPS position log, GET retrieves latest position
+- Optimize Route API: POST returns optimized stop order with ETAs and distances
+- All 6 API route groups responding correctly with 200 status codes
+- No crash errors in dev.log
+
+Git Commit: Included in (433ed78) — committed alongside ERP module by parallel agent
