@@ -393,3 +393,39 @@ Verification:
 - Prisma schema pushed successfully
 - All 13 delivery API routes compile and respond
 - Frontend components render correctly with GGH design system
+
+---
+Task ID: 5
+Agent: Documentation Writer
+Task: Write Professional README.md
+
+Work Log:
+- Read worklog.md to understand full project history (Tasks 0-3c)
+- Read package.json, prisma/schema.prisma, .env.example, next.config.ts, Caddyfile, tsconfig.json
+- Read src/lib/erp/config.ts, src/lib/location/config.ts, src/lib/delivery/config.ts
+- Read src/types/ggh.ts, src/services/api.ts, src/lib/ggh/i18n.ts
+- Read src/lib/delivery/types.ts, src/app/page.tsx
+- Explored full directory structure with find (140+ source files)
+- Wrote comprehensive 958-line README.md with 19 required sections
+- Committed: docs: professional README with full developer guide (58b669e)
+
+README Sections Completed:
+1. Project Overview — What is GGH, target users, key features
+2. Architecture — BFF pattern, Piastres money system, bilingual EN/AR, view-based SPA
+3. Technology Stack — Full table of every technology and version
+4. Folder Structure — Annotated tree of entire src/ directory
+5. Prerequisites — Node.js, bun, Git, optional ERPNext/Map keys
+6. Installation — Step-by-step clone, install, env, db:push, seed
+7. Environment Variables — Table of all 16 env vars with defaults and required/optional
+8. Development Workflow — Dev server, making changes, linting, key conventions
+9. Running the Backend — API routes, auth helper, seed data
+10. Running the Frontend — Dev server, building, production
+11. Database Setup — Prisma commands, schema overview (22 models, 8 groups), conventions
+12. ERPNext Integration — Config, 10 modules, sync orchestrator, webhooks, API routes
+13. GPS & Maps — 4 providers, capabilities table, 7 API routes
+14. Delivery Tracking — 13-step state machine, driver assignment scoring, warehouse ops, ETA, tracking UI, notifications
+15. API Reference — Complete table of ALL 50+ endpoints with method, path, description, auth required
+16. Design System — GGH tokens, color system, RTL support, accessibility, component standards
+17. Troubleshooting — Database, ERPNext, maps, auth, general issues with solutions
+18. Production Deployment — Docker, environment, security, monitoring, Caddy gateway
+19. Contributing — Code style, commit conventions, PR process, project-specific guidelines

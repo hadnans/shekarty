@@ -1,97 +1,119 @@
 // GGH Products — List products with pagination, filtering, sorting
+// With caching, Zod validation, structured logging, and apiHandler
 
 import { NextRequest } from 'next/server';
 import { db } from '@/lib/db';
-import { successResponse, paginatedResponse, errorResponse } from '@/lib/ggh/auth';
+import { paginatedResponse } from '@/lib/ggh/auth';
+import { apiHandler, ValidationError } from '@/lib/errors';
+import { productCache, cacheKey } from '@/lib/cache';
+import { productListSchema } from '@/lib/validation';
+import { createLogger } from '@/lib/logger';
 import { Prisma } from '@prisma/client';
 
-export async function GET(request: NextRequest) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
-    const limit = Math.min(50, Math.max(1, parseInt(searchParams.get('limit') || '20')));
-    const categoryId = searchParams.get('categoryId');
-    const search = searchParams.get('search');
-    const sort = searchParams.get('sort') || 'popular';
-    const featured = searchParams.get('featured');
-    const deals = searchParams.get('deals');
+const logger = createLogger('products');
 
-    const skip = (page - 1) * limit;
+export const GET = apiHandler(async (request: NextRequest) => {
+  const { searchParams } = new URL(request.url);
 
-    // Build where clause
-    const where: Prisma.ProductWhereInput = {
-      isActive: true,
-      deletedAt: null,
-    };
+  // Validate query parameters with Zod
+  const rawParams = Object.fromEntries(searchParams.entries());
+  const parsed = productListSchema.safeParse(rawParams);
+  if (!parsed.success) {
+    throw new ValidationError(
+      'Invalid query parameters',
+      'INVALID_PARAMS',
+      parsed.error.flatten().fieldErrors
+    );
+  }
 
-    if (categoryId) {
-      where.categoryId = categoryId;
-    }
+  const { page, limit, categoryId, search, sort, featured, deals } = parsed.data;
+  const skip = (page - 1) * limit;
 
-    if (search) {
-      where.OR = [
-        { nameEn: { contains: search } },
-        { nameAr: { contains: search } },
-        { brandEn: { contains: search } },
-        { brandAr: { contains: search } },
-        { handle: { contains: search } },
-      ];
-    }
+  // Build cache key
+  const cKey = cacheKey('products', `p${page}`, `l${limit}`, sort, categoryId ?? 'all', search ?? 'none', featured ?? 'none', deals ?? 'none');
 
-    if (featured === 'true') {
-      where.isFeatured = true;
-    }
+  // Try cache first
+  const cached = productCache.get<{ products: unknown[]; total: number }>(cKey);
+  if (cached) {
+    logger.debug('Products served from cache', { page, limit });
+    return paginatedResponse(cached.products, page, limit, cached.total);
+  }
 
-    if (deals === 'true') {
-      where.isDeal = true;
-    }
+  // Build where clause
+  const where: Prisma.ProductWhereInput = {
+    isActive: true,
+    deletedAt: null,
+  };
 
-    // Build order by
-    let orderBy: Prisma.ProductOrderByWithRelationInput = { totalSold: 'desc' };
-    switch (sort) {
-      case 'price_asc':
-        orderBy = { todayPrice: 'asc' };
-        break;
-      case 'price_desc':
-        orderBy = { todayPrice: 'desc' };
-        break;
-      case 'newest':
-        orderBy = { createdAt: 'desc' };
-        break;
-      case 'rating':
-        orderBy = { rating: 'desc' };
-        break;
-      case 'popular':
-      default:
-        orderBy = { totalSold: 'desc' };
-        break;
-    }
+  if (categoryId) {
+    where.categoryId = categoryId;
+  }
 
-    const [products, total] = await Promise.all([
-      db.product.findMany({
-        where,
-        orderBy,
-        skip,
-        take: limit,
-        include: {
-          category: {
-            select: {
-              id: true,
-              slug: true,
-              nameEn: true,
-              nameAr: true,
-              icon: true,
-              color: true,
-            },
+  if (search) {
+    where.OR = [
+      { nameEn: { contains: search } },
+      { nameAr: { contains: search } },
+      { brandEn: { contains: search } },
+      { brandAr: { contains: search } },
+      { handle: { contains: search } },
+    ];
+  }
+
+  if (featured === 'true') {
+    where.isFeatured = true;
+  }
+
+  if (deals === 'true') {
+    where.isDeal = true;
+  }
+
+  // Build order by
+  let orderBy: Prisma.ProductOrderByWithRelationInput = { totalSold: 'desc' };
+  switch (sort) {
+    case 'price_asc':
+      orderBy = { todayPrice: 'asc' };
+      break;
+    case 'price_desc':
+      orderBy = { todayPrice: 'desc' };
+      break;
+    case 'newest':
+      orderBy = { createdAt: 'desc' };
+      break;
+    case 'rating':
+      orderBy = { rating: 'desc' };
+      break;
+    case 'popular':
+    default:
+      orderBy = { totalSold: 'desc' };
+      break;
+  }
+
+  const [products, total] = await Promise.all([
+    db.product.findMany({
+      where,
+      orderBy,
+      skip,
+      take: limit,
+      include: {
+        category: {
+          select: {
+            id: true,
+            slug: true,
+            nameEn: true,
+            nameAr: true,
+            icon: true,
+            color: true,
           },
         },
-      }),
-      db.product.count({ where }),
-    ]);
+      },
+    }),
+    db.product.count({ where }),
+  ]);
 
-    return paginatedResponse(products, page, limit, total);
-  } catch (err) {
-    console.error('Products list error:', err);
-    return errorResponse('Failed to fetch products', 'PRODUCTS_FETCH_FAILED', 500);
-  }
-}
+  // Cache the result
+  productCache.set(cKey, { products, total });
+
+  logger.info('Products fetched', { page, limit, total, sort });
+
+  return paginatedResponse(products, page, limit, total);
+});
