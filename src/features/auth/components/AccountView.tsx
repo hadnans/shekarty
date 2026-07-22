@@ -1,6 +1,6 @@
 'use client';
 
-import { User, Package, Truck, Warehouse } from 'lucide-react';
+import { User, Package, Truck, Warehouse, Shield } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { type Lang, type CustomerProfile } from '@/types/ggh';
@@ -81,19 +81,10 @@ export default function AccountView({ lang, customer, onLogout, onNavigate }: Ac
             variant="ghost"
             className="w-full justify-start h-14 text-base rounded-xl"
             style={{ color: 'var(--ggh-text)' }}
-            onClick={() => onNavigate?.('dispatcher')}
+            onClick={() => onNavigate?.('admin')}
           >
-            <Truck className="size-5 me-3" style={{ color: 'var(--ggh-accent)' }} />
-            {lang === 'ar' ? 'لوحة المراقب' : 'Dispatcher Dashboard'}
-          </Button>
-          <Button
-            variant="ghost"
-            className="w-full justify-start h-14 text-base rounded-xl"
-            style={{ color: 'var(--ggh-text)' }}
-            onClick={() => onNavigate?.('warehouse')}
-          >
-            <Warehouse className="size-5 me-3" style={{ color: 'var(--ggh-primary)' }} />
-            {lang === 'ar' ? 'لوحة المستودع' : 'Warehouse Dashboard'}
+            <Shield className="size-5 me-3" style={{ color: '#7C3AED' }} />
+            {lang === 'ar' ? 'بوابة الإدارة' : 'Admin Portal'}
           </Button>
         </div>
       </div>

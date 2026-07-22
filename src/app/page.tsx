@@ -37,13 +37,16 @@ import TrackingPage from '@/features/delivery/components/TrackingPage';
 import DispatcherDashboard from '@/features/delivery/components/DispatcherDashboard';
 import WarehouseDashboard from '@/features/delivery/components/WarehouseDashboard';
 
+// Admin Feature Components
+import { AdminLayout } from '@/features/admin';
+
 // UI Components
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 // ============================================
 // VIEWS
 // ============================================
-type AppView = 'shop' | 'checkout' | 'orders' | 'account' | 'tracking' | 'dispatcher' | 'warehouse';
+type AppView = 'shop' | 'checkout' | 'orders' | 'account' | 'tracking' | 'dispatcher' | 'warehouse' | 'admin';
 
 export default function Home() {
   const { lang, isRTL, toggleLang } = useLangStore();
@@ -193,6 +196,11 @@ export default function Home() {
         {t(lang, 'skipToContent')}
       </a>
 
+      {/* Admin Mode — full admin layout replaces storefront layout */}
+      {currentView === 'admin' ? (
+        <AdminLayout lang={lang} onExitAdmin={() => setCurrentView('shop')} />
+      ) : (
+      <>
       {/* Header */}
       <Header
         lang={lang}
@@ -404,6 +412,8 @@ export default function Home() {
           el?.scrollIntoView({ behavior: 'smooth' });
         }}
       />
+      </>
+      )}
     </div>
   );
 }

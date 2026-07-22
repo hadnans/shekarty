@@ -1,13 +1,14 @@
 // GGH Auth — Send OTP
-// With rate limiting, Zod validation, structured logging, and apiHandler
+// With rate limiting, Zod validation, structured logging, apiHandler
+// Updated to use SmsProvider instead of hardcoded OTP
 
 import { NextRequest } from 'next/server';
-import { db } from '@/lib/db';
 import { successResponse, normalizePhone } from '@/lib/ggh/auth';
 import { apiHandler, ValidationError, RateLimitError } from '@/lib/errors';
 import { authLimiter } from '@/lib/rate-limit';
 import { sendOtpSchema } from '@/lib/validation';
 import { createLogger } from '@/lib/logger';
+import { sendOtp } from '@/lib/sms';
 
 const logger = createLogger('auth:otp-send');
 
@@ -30,30 +31,24 @@ export const POST = apiHandler(async (request: NextRequest) => {
 
   logger.info('OTP send requested', { phone: normalizedPhone });
 
-  // Invalidate any previous OTPs for this phone
-  await db.otpCode.updateMany({
-    where: { phone: normalizedPhone, verified: false },
-    data: { verified: true }, // Mark as used to invalidate
+  // Use the SmsProvider to send OTP
+  // This replaces the previous hardcoded '1234' approach
+  const result = await sendOtp(normalizedPhone, 'login');
+
+  logger.info('OTP sent successfully', {
+    phone: normalizedPhone,
+    providerUsed: result.messageId ? 'external' : 'dev',
   });
 
-  // In development mode, always use code 1234
-  const code = '1234';
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
-
-  await db.otpCode.create({
-    data: {
-      phone: normalizedPhone,
-      code,
-      expiresAt,
-      attempts: 0,
-      verified: false,
-    },
-  });
-
-  logger.info('OTP sent successfully', { phone: normalizedPhone });
+  // In development, include the code in the response for testing convenience
+  // In production, the code is only visible in the SMS message
+  const isDevMode = process.env.SMS_PROVIDER === 'dev' || !process.env.SMS_PROVIDER;
 
   return successResponse(
-    { message: 'OTP sent successfully' },
+    {
+      message: 'OTP sent successfully',
+      ...(isDevMode ? { code: result.code } : {}),
+    },
     'OTP sent successfully'
   );
 });

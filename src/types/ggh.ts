@@ -107,6 +107,7 @@ export interface CustomerProfile {
   preferredLang: Lang;
   wholesaleStatus: 'retail' | 'wholesale' | 'vip';
   isVerified: boolean;
+  isAdmin?: boolean;
 }
 
 export interface OtpRequest {
@@ -390,4 +391,151 @@ export interface SearchResult {
   categories: Category[];
   totalProducts: number;
   totalCategories: number;
+}
+
+// ============================================
+// ADMIN TYPES
+// ============================================
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  nameEn: string;
+  nameAr: string;
+  phone: string;
+  isActive: boolean;
+  lastLoginAt: string | null;
+  customerId: string | null;
+  roles: string[];
+  createdAt: string;
+}
+
+export type AdminSubView =
+  | 'dashboard'
+  | 'products'
+  | 'categories'
+  | 'deals'
+  | 'inventory'
+  | 'price-rules'
+  | 'bulk'
+  | 'orders'
+  | 'customers'
+  | 'delivery'
+  | 'analytics'
+  | 'loyalty'
+  | 'settings'
+  | 'rbac';
+
+export interface DashboardStats {
+  ordersToday: number;
+  revenueToday: Piastres;
+  totalCustomers: number;
+  lowStockCount: number;
+  pendingOrders: number;
+  activeDeals: number;
+  recentOrders: Order[];
+  topProducts: Product[];
+}
+
+export interface RevenueDataPoint {
+  date: string;
+  revenue: Piastres;
+  orders: number;
+}
+
+export interface PriceRule {
+  id: string;
+  nameEn: string;
+  nameAr: string;
+  type: string;
+  value: number;
+  minQuantity: number;
+  maxQuantity: number | null;
+  minOrderTotal: Piastres;
+  customerId: string | null;
+  customerGroup: string;
+  categoryId: string | null;
+  productId: string | null;
+  zoneId: string | null;
+  priority: number;
+  startsAt: string | null;
+  endsAt: string | null;
+  isActive: boolean;
+}
+
+export interface BulkImportJob {
+  id: string;
+  type: string;
+  fileName: string;
+  totalRows: number;
+  processedRows: number;
+  failedRows: number;
+  status: string;
+  createdAt: string;
+}
+
+export interface Role {
+  id: string;
+  name: string;
+  nameEn: string;
+  nameAr: string;
+  description: string;
+  isSystem: boolean;
+  permissions: string[];
+}
+
+export interface Permission {
+  id: string;
+  name: string;
+  nameEn: string;
+  nameAr: string;
+  module: string;
+  action: string;
+}
+
+export interface LoyaltyProgram {
+  id: string;
+  nameEn: string;
+  nameAr: string;
+  type: string;
+  pointsPerPiastre: number;
+  pointsValue: Piastres;
+  isActive: boolean;
+}
+
+export interface PaymentTransaction {
+  id: string;
+  orderId: string;
+  customerId: string;
+  provider: string;
+  providerTxId: string;
+  amount: Piastres;
+  status: string;
+  method: string;
+  createdAt: string;
+}
+
+export interface Shipment {
+  id: string;
+  orderId: string;
+  trackingNumber: string;
+  status: string;
+  estimatedDelivery: string | null;
+  actualDelivery: string | null;
+}
+
+export interface AdminSettings {
+  storeNameEn: string;
+  storeNameAr: string;
+  storePhone: string;
+  storeEmail: string;
+  freeDeliveryThreshold: Piastres;
+  standardDeliveryFee: Piastres;
+  defaultLang: Lang;
+}
+
+export interface AdminAuthResponse {
+  success: boolean;
+  admin: AdminUser;
+  token: string;
 }

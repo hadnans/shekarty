@@ -38,6 +38,12 @@ model Customer {
   reviews       Review[]
   otpCodes      OtpCode[]
   sessions      Session[]
+  adminUser     AdminUser?
+  priceRules    PriceRule[]
+  paymentTransactions PaymentTransaction[]
+  loyaltyTransactions LoyaltyTransaction[]
+  notificationSubscriptions NotificationSubscription[]
+  notificationLogs     NotificationLog[]
 
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -82,6 +88,108 @@ model Session {
 }
 
 // ============================================
+// ADMIN & RBAC
+// ============================================
+
+model AdminUser {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  nameEn        String
+  nameAr        String    @default("")
+  phone         String    @default("")
+  passwordHash  String    @default("")
+  avatarUrl     String?
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  customerId    String?  @unique
+
+  customer      Customer? @relation(fields: [customerId], references: [id])
+  roles         AdminUserRole[]
+  sessions      AdminSession[]
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  @@map("admin_users")
+}
+
+model AdminSession {
+  id          String    @id @default(cuid())
+  token       String    @unique
+  adminId     String
+  deviceInfo  String    @default("")
+  ipAddress   String    @default("")
+  expiresAt   DateTime
+  isActive    Boolean   @default(true)
+
+  admin       AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([token])
+  @@map("admin_sessions")
+}
+
+model Role {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  nameEn      String
+  nameAr      String
+  description String    @default("")
+  isSystem    Boolean   @default(false)
+
+  adminUsers  AdminUserRole[]
+  permissions RolePermission[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  nameEn      String
+  nameAr      String
+  module      String
+  action      String
+
+  roles       RolePermission[]
+
+  createdAt   DateTime  @default(now())
+
+  @@index([module, action])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String  @id @default(cuid())
+  roleId       String
+  permissionId String
+
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model AdminUserRole {
+  id       String  @id @default(cuid())
+  adminId  String
+  roleId   String
+
+  admin    AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  role     Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([adminId, roleId])
+  @@map("admin_user_roles")
+}
+
+// ============================================
 // PRODUCT CATALOG
 // ============================================
 
@@ -101,6 +209,7 @@ model Category {
   parent      Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
   children    Category[] @relation("CategoryHierarchy")
   products    Product[]
+  priceRules  PriceRule[]
 
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
@@ -119,13 +228,13 @@ model Product {
   brandEn         String    @default("")
   brandAr         String    @default("")
   weight          String    @default("")
-  unit            String    @default("piece") // piece, kg, liter, pack
+  unit            String    @default("piece")
   barcode         String?
-  todayPrice      Int       @default(0) // piastres
-  yesterdayPrice  Int?      // piastres
-  wholesalePrice  Int?      // piastres
-  costPrice       Int?      // piastres
-  compareAtPrice  Int?      // piastres
+  todayPrice      Int       @default(0)
+  yesterdayPrice  Int?
+  wholesalePrice  Int?
+  costPrice       Int?
+  compareAtPrice  Int?
   rating          Float     @default(0)
   reviewCount     Int       @default(0)
   totalSold       Int       @default(0)
@@ -149,6 +258,7 @@ model Product {
   reviews         Review[]
   productImages   ProductImage[]
   deals           Deal[]
+  priceRules      PriceRule[]
 
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -183,10 +293,10 @@ model ProductImage {
 model CartItem {
   id         String  @id @default(cuid())
   customerId String?
-  sessionId  String? // for guest carts
+  sessionId  String?
   productId  String
   quantity   Int     @default(1)
-  unitPrice  Int     // piastres at time of add
+  unitPrice  Int
 
   customer   Customer? @relation(fields: [customerId], references: [id], onDelete: Cascade)
   product    Product   @relation(fields: [productId], references: [id])
@@ -204,36 +314,33 @@ model Order {
   id              String    @id @default(cuid())
   orderNumber     String    @unique
   customerId      String
-  status          String    @default("pending") // pending, confirmed, processing, packed, out_for_delivery, delivered, cancelled, returned
-  paymentMethod   String    @default("cod") // cod, card, wallet
-  paymentStatus   String    @default("pending") // pending, paid, failed, refunded
-  subtotal        Int       @default(0) // piastres
-  deliveryFee     Int       @default(0) // piastres
-  discountAmount  Int       @default(0) // piastres
-  totalAmount     Int       @default(0) // piastres
+  status          String    @default("pending")
+  paymentMethod   String    @default("cod")
+  paymentStatus   String    @default("pending")
+  subtotal        Int       @default(0)
+  deliveryFee     Int       @default(0)
+  discountAmount  Int       @default(0)
+  totalAmount     Int       @default(0)
   notes           String    @default("")
-
-  // Delivery info
   deliveryAddressId String?
-  deliveryAddressSnapshot String @default("") // JSON snapshot
-  deliverySlot    String    @default("") // e.g., "morning", "afternoon", "evening"
+  deliveryAddressSnapshot String @default("")
+  deliverySlot    String    @default("")
   deliveryDate    DateTime?
   deliveredAt     DateTime?
-
-  // Driver info
   driverId        String?
   driverName      String    @default("")
   driverPhone     String    @default("")
-
-  // ERP sync
-  erpSalesOrder   String    @default("") // ERPNext Sales Order ID
-  erpSyncStatus   String    @default("pending") // pending, synced, failed
+  erpSalesOrder   String    @default("")
+  erpSyncStatus   String    @default("pending")
   erpSyncedAt     DateTime?
 
   customer        Customer   @relation(fields: [customerId], references: [id])
   items           OrderItem[]
   statusHistory   OrderStatusHistory[]
   assignment      DeliveryAssignment?
+  shipment        Shipment?
+  paymentTransactions PaymentTransaction[]
+  loyaltyTransactions LoyaltyTransaction[]
 
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
@@ -256,8 +363,8 @@ model OrderItem {
   weight      String  @default("")
   icon        String  @default("")
   quantity    Int
-  unitPrice   Int     // piastres
-  totalPrice  Int     // piastres
+  unitPrice   Int
+  totalPrice  Int
 
   order       Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product     Product @relation(fields: [productId], references: [id])
@@ -272,7 +379,7 @@ model OrderStatusHistory {
   orderId   String
   status    String
   note      String   @default("")
-  changedBy String   @default("system") // system, customer, admin, driver
+  changedBy String   @default("system")
 
   order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
@@ -289,15 +396,15 @@ model OrderStatusHistory {
 model Address {
   id            String   @id @default(cuid())
   customerId    String
-  label         String   @default("home") // home, work, other
+  label         String   @default("home")
   addressLine1  String
   addressLine2  String   @default("")
   city          String   @default("Cairo")
-  area          String   @default("") // e.g., "Nasr City", "Maadi"
+  area          String   @default("")
   buildingNo    String   @default("")
   floorNo       String   @default("")
   apartmentNo   String   @default("")
-  landmark      String   @default("") // nearest landmark
+  landmark      String   @default("")
   latitude      Float?
   longitude     Float?
   deliveryZone  String   @default("")
@@ -336,7 +443,7 @@ model Review {
   id         String  @id @default(cuid())
   customerId String
   productId  String
-  rating     Int     // 1-5
+  rating     Int
   commentEn  String  @default("")
   commentAr  String  @default("")
   isVerified Boolean @default(false)
@@ -395,11 +502,13 @@ model DeliveryZone {
   nameAr      String
   area        String
   city        String  @default("Cairo")
-  deliveryFee Int     @default(0) // piastres
-  minOrder    Int     @default(0) // piastres
-  estimatedHours Int  @default(24) // hours
+  deliveryFee Int     @default(0)
+  minOrder    Int     @default(0)
+  estimatedHours Int  @default(24)
   isActive    Boolean @default(true)
   sortOrder   Int     @default(0)
+
+  priceRules  PriceRule[]
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -418,7 +527,7 @@ model Notification {
   titleAr     String
   bodyEn      String
   bodyAr      String
-  type        String   @default("info") // info, order, deal, system
+  type        String   @default("info")
   isRead      Boolean  @default(false)
   actionUrl   String?
 
@@ -435,9 +544,9 @@ model Notification {
 model Deal {
   id            String    @id @default(cuid())
   productId     String
-  dealPrice     Int       // piastres
-  originalPrice Int       // piastres
-  discountPercent Int     // calculated
+  dealPrice     Int
+  originalPrice Int
+  discountPercent Int
   startsAt      DateTime
   endsAt        DateTime
   maxQuantity   Int       @default(100)
@@ -454,7 +563,7 @@ model Deal {
 }
 
 // ============================================
-// WAREHOUSE & LOGISTICS (from 09_Location_Logistics)
+// WAREHOUSE & LOGISTICS
 // ============================================
 
 model Warehouse {
@@ -468,10 +577,11 @@ model Warehouse {
   longitude   Float
   phone       String
   isActive    Boolean @default(true)
-  capacity    Int     @default(0) // max SKU count
+  capacity    Int     @default(0)
   currentLoad Int     @default(0)
 
   drivers     Driver[]
+  fulfillmentBatches FulfillmentBatch[]
 
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -485,7 +595,7 @@ model Driver {
   nameAr      String
   phone       String  @unique
   warehouseId String?
-  vehicleType String  @default("motorcycle") // motorcycle, car, van, truck
+  vehicleType String  @default("motorcycle")
   vehiclePlate String @default("")
   isActive    Boolean @default(true)
   isAvailable Boolean @default(true)
@@ -507,14 +617,14 @@ model Driver {
 
 model ErpSyncLog {
   id          String   @id @default(cuid())
-  entityType  String   // order, customer, product, stock
-  entityId    String   // GGH entity ID
-  action      String   // create, update, delete, sync
-  erpDocType  String   // Sales Order, Customer, Item, etc.
-  erpDocName  String?  // ERPNext document name
-  status      String   @default("pending") // pending, success, failed
-  request     String?  // JSON payload sent
-  response    String?  // JSON response received
+  entityType  String
+  entityId    String
+  action      String
+  erpDocType  String
+  erpDocName  String?
+  status      String   @default("pending")
+  request     String?
+  response    String?
   error       String?
   retryCount  Int      @default(0)
   syncedAt    DateTime?
@@ -535,12 +645,12 @@ model Geofence {
   id          String   @id @default(cuid())
   nameEn      String
   nameAr      String
-  type        String   // circle, polygon
+  type        String
   centerLat   Float?
   centerLng   Float?
-  radius      Float?   // meters, for circle type
-  points      String   // JSON array of {lat, lng} for polygon type
-  metadata    String   @default("{}") // JSON
+  radius      Float?
+  points      String
+  metadata    String   @default("{}")
   isActive    Boolean  @default(true)
 
   createdAt   DateTime @default(now())
@@ -556,12 +666,12 @@ model Geofence {
 model GpsPositionLog {
   id           String   @id @default(cuid())
   entityId     String
-  entityType   String   // driver, vehicle
+  entityType   String
   latitude     Float
   longitude    Float
   heading      Float    @default(0)
-  speed        Float    @default(0) // km/h
-  accuracy     Float    @default(0) // meters
+  speed        Float    @default(0)
+  accuracy     Float    @default(0)
   batteryLevel Int?
   timestamp    DateTime
 
@@ -579,7 +689,7 @@ model DeliveryAssignment {
   orderId       String   @unique
   driverId      String
   warehouseId   String?
-  status        String   @default("assigned") // assigned, accepted, arrived_pickup, picked_up, arrived_delivery, delivered, failed, cancelled
+  status        String   @default("assigned")
   assignedAt    DateTime @default(now())
   acceptedAt    DateTime?
   pickedUpAt    DateTime?
@@ -595,4 +705,276 @@ model DeliveryAssignment {
   @@index([driverId])
   @@index([status])
   @@map("delivery_assignments")
+}
+
+// ============================================
+// PRICE RULES
+// ============================================
+
+model PriceRule {
+  id              String    @id @default(cuid())
+  nameEn          String
+  nameAr          String    @default("")
+  type            String    // percentage_discount, fixed_discount, bulk_tier, wholesale_markup, zone_pricing
+  value           Int       // piastres for fixed, or percentage
+  minQuantity     Int       @default(0)
+  maxQuantity     Int?
+  minOrderTotal   Int       @default(0)
+  customerId      String?
+  customerGroup   String    @default("")
+  categoryId      String?
+  productId       String?
+  zoneId          String?
+  priority        Int       @default(0)
+  startsAt        DateTime?
+  endsAt          DateTime?
+  isActive        Boolean   @default(true)
+
+  customer        Customer?    @relation(fields: [customerId], references: [id])
+  category        Category?    @relation(fields: [categoryId], references: [id])
+  product         Product?     @relation(fields: [productId], references: [id])
+  zone            DeliveryZone? @relation(fields: [zoneId], references: [id])
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  deletedAt       DateTime?
+
+  @@index([isActive, priority])
+  @@map("price_rules")
+}
+
+// ============================================
+// BULK IMPORT/EXPORT
+// ============================================
+
+model BulkImportJob {
+  id            String   @id @default(cuid())
+  type          String   // products, categories, inventory, customers
+  fileName      String
+  fileSize      Int      @default(0)
+  totalRows     Int      @default(0)
+  processedRows Int      @default(0)
+  failedRows    Int      @default(0)
+  status        String   @default("pending")
+  errors        String   @default("")
+  result        String   @default("")
+  adminId       String
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([adminId])
+  @@index([status])
+  @@map("bulk_import_jobs")
+}
+
+// ============================================
+// FULFILLMENT
+// ============================================
+
+model FulfillmentBatch {
+  id            String    @id @default(cuid())
+  warehouseId   String
+  status        String    @default("pending")
+  totalOrders   Int       @default(0)
+  totalItems    Int       @default(0)
+  assignedAt    DateTime?
+  pickedAt      DateTime?
+  packedAt      DateTime?
+  shippedAt     DateTime?
+
+  warehouse     Warehouse @relation(fields: [warehouseId], references: [id])
+  items         FulfillmentBatchItem[]
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@map("fulfillment_batches")
+}
+
+model FulfillmentBatchItem {
+  id              String  @id @default(cuid())
+  batchId         String
+  orderId         String
+  productId       String
+  quantity        Int
+  pickedQuantity   Int     @default(0)
+  status          String  @default("pending")
+
+  batch           FulfillmentBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId])
+  @@map("fulfillment_batch_items")
+}
+
+model ShippingProvider {
+  id          String  @id @default(cuid())
+  nameEn      String
+  nameAr      String
+  code        String  @unique
+  apiEndpoint String  @default("")
+  apiKey      String  @default("")
+  isActive    Boolean @default(true)
+
+  shipments   Shipment[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("shipping_providers")
+}
+
+model Shipment {
+  id              String    @id @default(cuid())
+  orderId         String    @unique
+  providerId      String?
+  trackingNumber  String    @default("")
+  status          String    @default("created")
+  estimatedDelivery DateTime?
+  actualDelivery    DateTime?
+  weightKg        Float     @default(0)
+  notes           String    @default("")
+
+  order           Order          @relation(fields: [orderId], references: [id])
+  provider        ShippingProvider? @relation(fields: [providerId], references: [id])
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([orderId])
+  @@index([trackingNumber])
+  @@map("shipments")
+}
+
+// ============================================
+// PAYMENT TRANSACTIONS
+// ============================================
+
+model PaymentTransaction {
+  id              String    @id @default(cuid())
+  orderId         String
+  customerId      String
+  provider        String    // cod, paymob, fawry, valu, instapay
+  providerTxId    String    @default("")
+  amount          Int       // piastres
+  status          String    @default("pending")
+  method          String    @default("cod")
+  metadata        String    @default("{}")
+  refundAmount    Int       @default(0)
+  failureReason   String?
+  processedAt     DateTime?
+  refundedAt      DateTime?
+
+  order           Order     @relation(fields: [orderId], references: [id])
+  customer        Customer  @relation(fields: [customerId], references: [id])
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([orderId])
+  @@index([customerId])
+  @@index([status])
+  @@map("payment_transactions")
+}
+
+// ============================================
+// LOYALTY PROGRAM
+// ============================================
+
+model LoyaltyProgram {
+  id              String    @id @default(cuid())
+  nameEn          String
+  nameAr          String    @default("")
+  type            String    // points, cashback, tiered
+  pointsPerPiastre Float   @default(0.01)
+  pointsValue     Int       @default(100)
+  minRedemption   Int       @default(0)
+  maxAccumulation Int?
+  isActive        Boolean   @default(true)
+  startsAt        DateTime?
+  endsAt          DateTime?
+
+  transactions    LoyaltyTransaction[]
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("loyalty_programs")
+}
+
+model LoyaltyTransaction {
+  id              String    @id @default(cuid())
+  customerId      String
+  programId       String
+  orderId         String?
+  points          Int
+  type            String    // earn, redeem, bonus, expire, adjust
+  descriptionEn   String    @default("")
+  descriptionAr   String    @default("")
+  expiresAt       DateTime?
+
+  customer        Customer      @relation(fields: [customerId], references: [id])
+  program         LoyaltyProgram @relation(fields: [programId], references: [id])
+  order           Order?        @relation(fields: [orderId], references: [id])
+
+  createdAt       DateTime  @default(now())
+
+  @@index([customerId])
+  @@index([programId])
+  @@map("loyalty_transactions")
+}
+
+// ============================================
+// NOTIFICATION SUBSCRIPTIONS & LOGS
+// ============================================
+
+model NotificationSubscription {
+  id            String   @id @default(cuid())
+  customerId    String
+  channel       String   // push, sms, email, whatsapp
+  token         String   @default("")
+  preferences   String   @default("{}")
+  isActive      Boolean  @default(true)
+
+  customer      Customer @relation(fields: [customerId], references: [id])
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([customerId, channel])
+  @@map("notification_subscriptions")
+}
+
+model NotificationLog {
+  id            String   @id @default(cuid())
+  customerId    String
+  channel       String
+  titleEn       String
+  titleAr       String
+  bodyEn        String
+  bodyAr        String
+  type          String   @default("info")
+  status        String   @default("pending")
+  sentAt        DateTime?
+  failureReason String?
+
+  customer      Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  createdAt     DateTime @default(now())
+
+  @@index([customerId])
+  @@index([status])
+  @@map("notification_logs")
+}
+
+// ============================================
+// APP SETTINGS
+// ============================================
+
+model AppSetting {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String @default("")
+
+  @@map("app_settings")
 }
